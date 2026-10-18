@@ -1,7 +1,11 @@
 import {
+  CREATOR_DATA_VERSION,
+  CREATOR_DEFAULT_BRANDING,
+  CREATOR_MAX_BRAND_NAME,
   CREATOR_MAX_HEADLINE,
   CREATOR_MAX_NAME,
   CREATOR_MAX_SLIDES,
+  CREATOR_MAX_TITLES_PER_SLIDE,
   creatorProjectTitles,
   creatorTitleKey,
   type CreatorProjectData,
@@ -12,6 +16,7 @@ import {
   CREATOR_TEMPLATES,
   creatorTemplate,
   isCreatorTemplateId,
+  slideLayoutOf,
   templateHighlightsDates,
   templateRanksTitles,
 } from '@/features/creator/templates';
@@ -22,7 +27,6 @@ import {
   parseCreatorCaption,
   parseCreatorProjectData,
   parseCreatorProjectName,
-  parseCreatorProjectRow,
   parseCreatorSlide,
   parseCreatorTitleRef,
 } from '@/features/creator/validation';
@@ -45,6 +49,7 @@ import {
   safeFileBase,
 } from '@/features/creator/exportPlan';
 import {
+  formatScore,
   formatSlideDate,
   formatSlideRating,
   mediaTypeLabel,
@@ -78,7 +83,15 @@ function slide(overrides: Partial<CreatorSlide> = {}, template: Parameters<typeo
 }
 
 function projectData(slides: CreatorSlide[], overrides: Partial<CreatorProjectData> = {}): CreatorProjectData {
-  return { version: 1, theme: 'dark', accentId: 'lavender', showBranding: true, slides, ...overrides };
+  return {
+    version: CREATOR_DATA_VERSION,
+    theme: 'dark',
+    accentId: 'lavender',
+    showBranding: true,
+    branding: { ...CREATOR_DEFAULT_BRANDING },
+    slides,
+    ...overrides,
+  };
 }
 
 function catalogMedia(overrides: Partial<CatalogMedia> = {}): CatalogMedia {
@@ -95,26 +108,37 @@ function catalogMedia(overrides: Partial<CatalogMedia> = {}): CatalogMedia {
 }
 
 describe('creator template registry', () => {
-  it('ships the seven required templates as valid, distinct metadata', () => {
-    expect(CREATOR_TEMPLATES).toHaveLength(7);
+  it('ships the nine required layouts as valid, distinct metadata', () => {
+    expect(CREATOR_TEMPLATES).toHaveLength(9);
     const ids = CREATOR_TEMPLATES.map((template) => template.id);
-    expect(new Set(ids).size).toBe(7);
+    expect(new Set(ids).size).toBe(9);
     for (const template of CREATOR_TEMPLATES) {
       expect(template.minTitles).toBeLessThanOrEqual(template.maxTitles);
+      // Every layout caps at five so one slide never crowds the 4:5 canvas.
+      expect(template.maxTitles).toBeLessThanOrEqual(5);
       expect(template.defaultSlides).toBe(1);
       expect(template.maxSlides).toBe(CREATOR_MAX_SLIDES);
       expect(template.name.length).toBeGreaterThan(0);
       expect(template.defaultHeadline.length).toBeGreaterThan(0);
     }
+    expect(CREATOR_TEMPLATES.some((template) => template.kind === 'cover')).toBe(true);
+    expect(CREATOR_TEMPLATES.some((template) => template.kind === 'promo')).toBe(true);
     expect(isCreatorTemplateId('top5')).toBe(true);
+    expect(isCreatorTemplateId('top10')).toBe(false);
+    expect(isCreatorTemplateId('stacked-ranking')).toBe(true);
     expect(isCreatorTemplateId('nope')).toBe(false);
     expect(creatorTemplate('top5').maxTitles).toBe(5);
     expect(() => creatorTemplate('nope' as never)).toThrow('Unknown creator template');
   });
 
+  it('resolves each slide layout with the project template as fallback', () => {
+    expect(slideLayoutOf({ layout: 'collage-cover' }, 'top5')).toBe('collage-cover');
+    expect(slideLayoutOf({}, 'top5')).toBe('top5');
+  });
+
   it('flags ranked and date-first templates for the renderers', () => {
     expect(templateRanksTitles('top5')).toBe(true);
-    expect(templateRanksTitles('top10')).toBe(true);
+    expect(templateRanksTitles('stacked-ranking')).toBe(false);
     expect(templateRanksTitles('movie-comparison')).toBe(false);
     expect(templateHighlightsDates('upcoming-releases')).toBe(true);
     expect(templateHighlightsDates('top5')).toBe(false);
@@ -138,7 +162,9 @@ describe('creator validation', () => {
       year: 2011,
       releaseDate: '2011-04-17',
       posterUrl: 'https://example.test/poster.jpg',
+      backdropUrl: 'https://example.test/backdrop.jpg',
       rating: 8.4,
+      imdbRating: 9.2,
       language: 'en',
       overview: 'Nine noble families fight for control.',
       seasons: 8,
@@ -148,6 +174,8 @@ describe('creator validation', () => {
     });
     expect(parsed).not.toBeNull();
     expect(parsed?.seasons).toBe(8);
+    expect(parsed?.backdropUrl).toBe('https://example.test/backdrop.jpg');
+    expect(parsed?.imdbRating).toBe(9.2);
     expect(parsed?.genres).toEqual(['Drama', 'Fantasy']);
     expect(parsed?.providers).toEqual(['HBO', 'Sky', 'Crave']);
   });
@@ -162,9 +190,10 @@ describe('creator validation', () => {
     expect(parseCreatorTitleRef({ provider: 'tmdb', mediaType: 'movie', providerId: '1', title: 'X', year: 3000 })?.year).toBeUndefined();
   });
 
-  it('parses slides with fallback ids and bounded title refs', () => {
+  it('parses slides with fallback ids, layout overrides, and bounded title refs', () => {
     const parsed = parseCreatorSlide({ headline: 'Hi', titleRefs: [{ provider: 'tmdb', mediaType: 'movie', providerId: '1', title: 'X' }] }, 'fallback-1');
     expect(parsed?.id).toBe('fallback-1');
+    expect(parsed?.layout).toBeUndefined();
     expect(parsed?.titleRefs).toHaveLength(1);
     expect(parsed?.showRating).toBe(true);
     expect(parsed?.showProviders).toBe(true);
@@ -172,11 +201,16 @@ describe('creator validation', () => {
     const unsafeId = parseCreatorSlide({ id: 'has spaces!', headline: 'Hi' }, 'fallback-2');
     expect(unsafeId?.id).toBe('fallback-2');
 
+    const layout = parseCreatorSlide({ layout: 'collage-cover', headline: 'Hi' }, 'fallback-layout');
+    expect(layout?.layout).toBe('collage-cover');
+    const badLayout = parseCreatorSlide({ layout: 'top10', headline: 'Hi' }, 'fallback-layout-2');
+    expect(badLayout?.layout).toBeUndefined();
+
     const many = parseCreatorSlide(
       { titleRefs: Array.from({ length: 15 }, (_, index) => ({ provider: 'tmdb', mediaType: 'movie', providerId: String(index), title: `T${index}` })) },
       'fallback-3',
     );
-    expect(many?.titleRefs).toHaveLength(10);
+    expect(many?.titleRefs).toHaveLength(CREATOR_MAX_TITLES_PER_SLIDE);
     expect(parseCreatorSlide('nope', 'fallback-4')).toBeNull();
   });
 
@@ -188,6 +222,7 @@ describe('creator validation', () => {
     expect(parsed?.slides).toHaveLength(2);
 
     expect(parseCreatorProjectData(null)).toBeNull();
+    expect(parseCreatorProjectData({ ...good, version: 1 })).toBeNull();
     expect(parseCreatorProjectData({ ...good, version: 99 })).toBeNull();
     expect(parseCreatorProjectData({ ...good, theme: 'neon' })).toBeNull();
     expect(parseCreatorProjectData({ ...good, accentId: 'neon' })).toBeNull();
@@ -201,27 +236,15 @@ describe('creator validation', () => {
     expect(cutByCap?.slides).toHaveLength(1);
   });
 
-  it('validates full rows and one-slide posts', () => {
-    const row = {
-      id: '11111111-1111-1111-1111-111111111111',
-      user_id: '22222222-2222-2222-2222-222222222222',
-      name: 'My top 5',
-      template_id: 'top5',
-      format: 'post',
-      aspect_ratio: '4:5',
-      slide_data: projectData([slide({}, 'top5')]),
-      caption: 'hello',
-      created_at: '2026-10-18T00:00:00Z',
-      updated_at: '2026-10-18T00:00:00Z',
-    };
-    expect(parseCreatorProjectRow(row)?.templateId).toBe('top5');
-    expect(parseCreatorProjectRow({ ...row, aspect_ratio: '1:1' })).toBeNull();
-    expect(parseCreatorProjectRow({ ...row, template_id: 'nope' })).toBeNull();
-    expect(parseCreatorProjectRow({ ...row, format: 'story' })).toBeNull();
-    expect(parseCreatorProjectRow({ ...row, name: '   ' })).toBeNull();
-    expect(parseCreatorProjectRow({ ...row, slide_data: { version: 1 } })).toBeNull();
-    // A post row holding several slides is trimmed to its one slide.
-    expect(parseCreatorProjectRow({ ...row, slide_data: projectData([slide({}, 'top5'), slide({}, 'top5')]) })?.data.slides).toHaveLength(1);
+  it('parses branding with safe defaults and bounds', () => {
+    const data = projectData([slide({}, 'top5')]);
+    const custom = parseCreatorProjectData({ ...data, branding: { name: '  Cine Club  ', handle: '@cineclub', tagline: 'Nightly picks' } });
+    expect(custom?.branding).toEqual({ name: 'Cine Club', handle: '@cineclub', tagline: 'Nightly picks' });
+
+    // Missing or broken branding falls back to the app's own identity.
+    expect(parseCreatorProjectData({ ...data, branding: undefined })?.branding).toEqual(CREATOR_DEFAULT_BRANDING);
+    expect(parseCreatorProjectData({ ...data, branding: { name: '   ' } })?.branding.name).toBe(CREATOR_DEFAULT_BRANDING.name);
+    expect(parseCreatorProjectData({ ...data, branding: { name: 'x'.repeat(100) } })?.branding.name).toHaveLength(CREATOR_MAX_BRAND_NAME);
   });
 
   it('bounds captions, names, and formats', () => {
@@ -260,10 +283,15 @@ describe('creator title snapshots', () => {
     expect(snapshot.genres).toEqual(['Action', 'Drama']);
     expect(snapshot.providers).toEqual(['Netflix', 'Prime Video']);
 
+    const wide = titleRefFromMedia(catalogMedia({ title: 'Wide', backdropUrl: 'https://example.test/backdrop.jpg' }));
+    expect(wide.backdropUrl).toBe('https://example.test/backdrop.jpg');
+    expect(wide.imdbRating).toBeUndefined();
+
     const bare = titleRefFromMedia(catalogMedia({ title: 'Bare' }));
     expect(bare.year).toBeUndefined();
     expect(bare.rating).toBeUndefined();
     expect(bare.posterUrl).toBeUndefined();
+    expect(bare.backdropUrl).toBeUndefined();
     expect(bare.providers).toBeUndefined();
     expect(bare.seasons).toBeUndefined();
   });
@@ -336,12 +364,14 @@ describe('creator slide distribution', () => {
     expect(result.slides[0].titleRefs).toHaveLength(1);
   });
 
-  it('builds seeded slides by splitting groups across the cap', () => {
+  it('builds seeded slides by splitting groups across the layout cap', () => {
     const refs = Array.from({ length: 12 }, (_, index) => ref({ title: `T${index}`, providerId: String(index) }));
-    const seeded = buildSeededSlides({ templateId: 'top10', format: 'carousel', groups: [refs.slice(0, 10), refs.slice(10)] });
-    expect(seeded).toHaveLength(2);
-    expect(seeded[0].titleRefs).toHaveLength(10);
-    expect(seeded[1].titleRefs).toHaveLength(2);
+    const seeded = buildSeededSlides({ templateId: 'stacked-ranking', format: 'carousel', groups: [refs.slice(0, 10), refs.slice(10)] });
+    expect(seeded).toHaveLength(3);
+    expect(seeded[0].titleRefs).toHaveLength(5);
+    expect(seeded[1].titleRefs).toHaveLength(5);
+    expect(seeded[2].titleRefs).toHaveLength(2);
+    expect(seeded[0].layout).toBe('stacked-ranking');
 
     const empty = buildSeededSlides({ templateId: 'top5', format: 'carousel', groups: [] });
     expect(empty).toHaveLength(1);
@@ -432,6 +462,29 @@ describe('creator editor reducer', () => {
   it('names fresh drafts with the template name and date', () => {
     expect(defaultProjectName('top5', new Date(2026, 9, 18))).toBe('Top 5 recommendations · 18 Oct');
   });
+
+  it('switches a slide layout and trims refs over the new cap', () => {
+    const before = creatorEditorReducer(
+      state(),
+      { type: 'addTitles', slideId: 's1', refs: Array.from({ length: 5 }, (_, index) => ref({ title: `T${index}`, providerId: String(index) })) },
+    );
+    expect(before.data.slides[0].titleRefs).toHaveLength(5);
+
+    const switched = creatorEditorReducer(before, { type: 'setSlideLayout', slideId: 's1', layout: 'movie-comparison' });
+    expect(switched.data.slides[0].layout).toBe('movie-comparison');
+    expect(switched.data.slides[0].titleRefs).toHaveLength(2);
+    // Untouched slides keep their identity so memoized canvases skip re-rendering.
+    expect(switched.data.slides[1]).toBe(before.data.slides[1]);
+    expect(switched.dirty).toBe(true);
+  });
+
+  it('edits branding fields with bounds and defaults', () => {
+    const edited = creatorEditorReducer(state(), { type: 'setBrandingField', key: 'name', value: '  Cine Club  ' });
+    expect(edited.data.branding.name).toBe('Cine Club');
+    const bound = creatorEditorReducer(edited, { type: 'setBrandingField', key: 'tagline', value: 'x'.repeat(200) });
+    expect(bound.data.branding.tagline.length).toBeLessThanOrEqual(90);
+    expect(edited.data.branding.handle).toBe('');
+  });
 });
 
 describe('creator seeds', () => {
@@ -439,8 +492,8 @@ describe('creator seeds', () => {
     expect(creatorSeedTarget('watchlist')).toEqual({ templateId: 'watchlist-collection', format: 'carousel' });
     expect(creatorSeedTarget('trending')).toEqual({ templateId: 'top5', format: 'carousel' });
     expect(creatorSeedTarget('upcoming')).toEqual({ templateId: 'upcoming-releases', format: 'carousel' });
-    expect(creatorSeedTarget('hits-month')).toEqual({ templateId: 'top10', format: 'carousel' });
-    expect(creatorSeedTarget('hits-year')).toEqual({ templateId: 'top10', format: 'carousel' });
+    expect(creatorSeedTarget('hits-month')).toEqual({ templateId: 'stacked-ranking', format: 'carousel' });
+    expect(creatorSeedTarget('hits-year')).toEqual({ templateId: 'stacked-ranking', format: 'carousel' });
     expect(CREATOR_SEEDS.map((seed) => seed.id)).toEqual([...CREATOR_SEED_IDS]);
   });
 
@@ -518,6 +571,9 @@ describe('creator slide text rules', () => {
     expect(formatSlideRating(0)).toBeUndefined();
     expect(formatSlideRating(Number.NaN)).toBeUndefined();
     expect(formatSlideRating(undefined)).toBeUndefined();
+    expect(formatScore(8.456)).toBe('8.5');
+    expect(formatScore(0)).toBeUndefined();
+    expect(formatScore(undefined)).toBeUndefined();
     expect(seasonsLabel(1)).toBe('1 Season');
     expect(seasonsLabel(4)).toBe('4 Seasons');
     expect(seasonsLabel(0)).toBeUndefined();

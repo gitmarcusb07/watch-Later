@@ -100,10 +100,11 @@ export function useTrending(enabled = true) {
   });
 }
 
-export function useRecentlyReleased() {
+export function useRecentlyReleased(enabled = true) {
   return useQuery({
     queryKey: ['catalog', 'recently-released'] as const,
     queryFn: ({ signal }) => catalogRepository.getRecentlyReleased(signal),
+    enabled,
     staleTime: 30 * 60_000,
     gcTime: 60 * 60_000,
   });
@@ -252,6 +253,23 @@ export function usePopularAnimePages(enabled = true) {
 export function useUpcomingMoviesPages(enabled = true) {
   const region = deviceRegion();
   return useInfiniteCatalog(['catalog', 'upcoming', 'movies', region], (page, signal) => catalogRepository.getUpcomingMoviesPage(page, region, signal), enabled);
+}
+
+/**
+ * Creator picker rails: rating-first discovery feeds. Keys live under
+ * `catalog/picker` so they never collide with browse shelves, and stay
+ * cached across picker sessions.
+ */
+export function useTopRatedTitlesPages(enabled = true) {
+  return useInfiniteCatalog(['catalog', 'picker', 'top-rated'], (page, signal) => catalogRepository.getTopRatedTitlesPage(page, signal), enabled);
+}
+
+export function useFlopPages(enabled = true) {
+  return useInfiniteCatalog(['catalog', 'picker', 'flops'], (page, signal) => catalogRepository.getFlopsPage(page, signal), enabled);
+}
+
+export function useYearPages(year: number, enabled = true) {
+  return useInfiniteCatalog(['catalog', 'picker', 'year', year], (page, signal) => catalogRepository.getYearPage(page, year, signal), enabled);
 }
 
 export function useUpcomingSeriesPages(enabled = true) {

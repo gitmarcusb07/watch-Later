@@ -69,24 +69,25 @@ export const tmdbClient = {
     if (!response || !Array.isArray(response.results)) throw new CatalogError('tmdb', 'invalid_response');
     return response;
   },
-  async discoverMovies(page = 1, options: { language?: string; region?: string; releaseDateGte?: string; releaseDateLte?: string; withGenres?: string } = {}, signal?: AbortSignal) {
+  async discoverMovies(page = 1, options: { language?: string; region?: string; releaseDateGte?: string; releaseDateLte?: string; withGenres?: string; sortBy?: string; voteCountGte?: number; primaryReleaseYear?: number } = {}, signal?: AbortSignal) {
     const response = await requestJson<TmdbListDto<TmdbMovieDto>>('tmdb', buildTmdbUrl('discover/movie', {
-      page, sort_by: 'popularity.desc', include_adult: 'false', include_video: 'false',
+      page, sort_by: options.sortBy ?? 'popularity.desc', include_adult: 'false', include_video: 'false',
       with_original_language: options.language, region: options.region,
       'primary_release_date.gte': options.releaseDateGte, 'primary_release_date.lte': options.releaseDateLte,
-      with_genres: options.withGenres,
+      with_genres: options.withGenres, 'vote_count.gte': options.voteCountGte,
+      primary_release_year: options.primaryReleaseYear,
     }), {}, signal);
     if (!response || !Array.isArray(response.results)) throw new CatalogError('tmdb', 'invalid_response');
     return response;
   },
-  async discoverTv(page = 1, options: { language?: string; region?: string; firstAirDateGte?: string; firstAirDateLte?: string; watchRegion?: string; watchProviders?: string; voteCountGte?: number; withGenres?: string } = {}, signal?: AbortSignal) {
+  async discoverTv(page = 1, options: { language?: string; region?: string; firstAirDateGte?: string; firstAirDateLte?: string; watchRegion?: string; watchProviders?: string; voteCountGte?: number; withGenres?: string; sortBy?: string; firstAirDateYear?: number } = {}, signal?: AbortSignal) {
     const response = await requestJson<TmdbListDto<TmdbTvDto>>('tmdb', buildTmdbUrl('discover/tv', {
-      page, sort_by: 'popularity.desc', include_adult: 'false',
+      page, sort_by: options.sortBy ?? 'popularity.desc', include_adult: 'false',
       with_original_language: options.language, region: options.region,
       'first_air_date.gte': options.firstAirDateGte, 'first_air_date.lte': options.firstAirDateLte,
       include_null_first_air_dates: 'false',
       watch_region: options.watchRegion, with_watch_providers: options.watchProviders, 'vote_count.gte': options.voteCountGte,
-      with_genres: options.withGenres,
+      with_genres: options.withGenres, first_air_date_year: options.firstAirDateYear,
     }), {}, signal);
     if (!response || !Array.isArray(response.results)) throw new CatalogError('tmdb', 'invalid_response');
     return response;

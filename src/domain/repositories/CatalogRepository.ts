@@ -52,6 +52,19 @@ export interface CatalogRepository {
   getUpcomingAnimePage(page: number, signal?: AbortSignal): Promise<PagedCatalog>;
   /** Paged titles for one genre, scoped to a shelf (`all`, `movies`, `shows`, `anime`). */
   getGenrePage(page: number, genreId: number, kind: GenrePageKind, signal?: AbortSignal): Promise<PagedCatalog>;
+  /**
+   * Paged all-time top-rated titles (TMDb top-rated movies + series, mixed).
+   * A genuinely rating-first list — unlike `getTopRated`, which ranks by
+   * favorite counts because TVDB publishes no scores.
+   */
+  getTopRatedTitlesPage(page: number, signal?: AbortSignal): Promise<PagedCatalog>;
+  /**
+   * Paged worst-rated released titles that a real audience still watched
+   * (vote floor), so "flops" are tried-and-missed, not obscure.
+   */
+  getFlopsPage(page: number, signal?: AbortSignal): Promise<PagedCatalog>;
+  /** Paged best-rated released titles of one calendar year (movies + series). */
+  getYearPage(page: number, year: number, signal?: AbortSignal): Promise<PagedCatalog>;
 }
 
 /** Which shelf of a genre screen is showing. */

@@ -26,10 +26,10 @@ describe('local database foundation', () => {
     expect(database.withExclusiveTransactionAsync).toHaveBeenCalledTimes(1);
     // v15 is recorded post-transaction (provider CHECK rebuild), so it lands
     // after v16/v17 in insertion order; set membership is what matters.
-    expect(appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 15]);
+    expect(appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 15]);
     expect(statements.some((sql) => sql.includes('content_references'))).toBe(true);
     await runMigrations(database);
-    expect(appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 15]);
+    expect(appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 15]);
   });
 
   it('exposes initialization through a repository boundary', async () => {

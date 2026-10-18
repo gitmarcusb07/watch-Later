@@ -1,7 +1,11 @@
 import {
   CREATOR_ACCENT_IDS,
   CREATOR_DATA_VERSION,
+  CREATOR_DEFAULT_BRANDING,
   CREATOR_FORMATS,
+  CREATOR_MAX_BRAND_HANDLE,
+  CREATOR_MAX_BRAND_NAME,
+  CREATOR_MAX_BRAND_TAGLINE,
   CREATOR_MAX_CAPTION,
   CREATOR_MAX_CLOSING,
   CREATOR_MAX_DESCRIPTION,
@@ -12,20 +16,20 @@ import {
   CREATOR_MAX_TITLES_PER_SLIDE,
   CREATOR_THEMES,
   type CreatorAccentId,
+  type CreatorBranding,
   type CreatorFormat,
   type CreatorProjectData,
   type CreatorSlide,
-  type CreatorTemplateId,
   type CreatorTheme,
   type CreatorTitleRef,
 } from '@/domain/models/creator';
 import { isCreatorTemplateId } from './templates';
 
 /**
- * Defensive parsing for everything Creator Studio persists or loads. Draft
- * JSON comes back from the network (a user's own rows, but still untrusted
- * input), so loading goes through these parsers and never trusts shapes.
- * Anything unparseable is dropped, not defaulted into a broken render.
+ * Defensive parsing for everything Creator Studio persists or loads. Drafts
+ * live on-device, but stored JSON is still treated as untrusted input: loading
+ * goes through these parsers and never trusts shapes. Anything unparseable is
+ * dropped, not defaulted into a broken render.
  */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,7 +74,9 @@ export function parseCreatorTitleRef(value: unknown): CreatorTitleRef | null {
     year: optionalNumber(value.year, 1870, 2200),
     releaseDate: boundedText(value.releaseDate, 20) || undefined,
     posterUrl: boundedText(value.posterUrl, 1000) || undefined,
+    backdropUrl: boundedText(value.backdropUrl, 1000) || undefined,
     rating: optionalNumber(value.rating, 0, 10),
+    imdbRating: optionalNumber(value.imdbRating, 0, 10),
     language: boundedText(value.language, 40) || undefined,
     overview: overview || undefined,
     seasons: optionalNumber(value.seasons, 1, 200),
@@ -105,8 +111,10 @@ export function parseCreatorSlide(value: unknown, fallbackId: string): CreatorSl
     ? value.titleRefs.map(parseCreatorTitleRef).filter((ref): ref is CreatorTitleRef => ref !== null).slice(0, CREATOR_MAX_TITLES_PER_SLIDE)
     : [];
   const id = typeof value.id === 'string' && SLIDE_ID.test(value.id) ? value.id : fallbackId;
+  const layout = isCreatorTemplateId(value.layout) ? value.layout : undefined;
   return {
     id,
+    ...(layout ? { layout } : {}),
     titleRefs,
     headline: boundedText(value.headline, CREATOR_MAX_HEADLINE) ?? '',
     subtitle: boundedText(value.subtitle, CREATOR_MAX_SUBTITLE) ?? '',
@@ -119,8 +127,18 @@ export function parseCreatorSlide(value: unknown, fallbackId: string): CreatorSl
   };
 }
 
+/** Parses the page identity block. Missing/broken fields fall back to defaults. */
+function parseCreatorBranding(value: unknown): CreatorBranding {
+  if (!isRecord(value)) return { ...CREATOR_DEFAULT_BRANDING };
+  return {
+    name: boundedText(value.name, CREATOR_MAX_BRAND_NAME) || CREATOR_DEFAULT_BRANDING.name,
+    handle: boundedText(value.handle, CREATOR_MAX_BRAND_HANDLE) ?? '',
+    tagline: boundedText(value.tagline, CREATOR_MAX_BRAND_TAGLINE) ?? '',
+  };
+}
+
 /**
- * Parses `creator_projects.slide_data`. Returns null only when the payload is
+ * Parses a stored draft payload. Returns null only when the payload is
  * structurally unusable; individual bad slides are dropped so one corrupt
  * entry never loses a whole draft. Slides are bounded to `maxSlides`.
  */
@@ -136,7 +154,14 @@ export function parseCreatorProjectData(value: unknown, maxSlides = CREATOR_MAX_
     .map((slide, index) => parseCreatorSlide(slide, `slide-${index + 1}`))
     .filter((slide): slide is CreatorSlide => slide !== null);
   if (!slides.length) return null;
-  return { version: CREATOR_DATA_VERSION, theme, accentId, showBranding: parseBoolean(value.showBranding, true), slides };
+  return {
+    version: CREATOR_DATA_VERSION,
+    theme,
+    accentId,
+    showBranding: parseBoolean(value.showBranding, true),
+    branding: parseCreatorBranding(value.branding),
+    slides,
+  };
 }
 
 export function parseCreatorProjectName(value: unknown): string | null {
@@ -151,59 +176,6 @@ export function clampCreatorText(value: string, max: number): string {
 
 export function parseCreatorCaption(value: unknown): string {
   return boundedText(value, CREATOR_MAX_CAPTION) ?? '';
-}
-
-export interface CreatorProjectRow {
-  id: string;
-  user_id: string;
-  name: string;
-  template_id: string;
-  format: string;
-  aspect_ratio: string;
-  slide_data: unknown;
-  caption: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ParsedCreatorProjectRow {
-  id: string;
-  userId: string;
-  name: string;
-  templateId: CreatorTemplateId;
-  format: CreatorFormat;
-  aspectRatio: '4:5';
-  caption: string;
-  data: CreatorProjectData;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** Validates a full Supabase row. Null for anything the app must not load. */
-export function parseCreatorProjectRow(row: CreatorProjectRow): ParsedCreatorProjectRow | null {
-  if (typeof row.id !== 'string' || !row.id) return null;
-  if (typeof row.user_id !== 'string' || !row.user_id) return null;
-  if (!isCreatorTemplateId(row.template_id)) return null;
-  if (!isCreatorFormat(row.format)) return null;
-  if (row.aspect_ratio !== '4:5') return null;
-  const name = parseCreatorProjectName(row.name);
-  if (!name) return null;
-  const data = parseCreatorProjectData(row.slide_data, formatMaxSlides(row.format));
-  if (!data) return null;
-  const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
-  const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
-  return {
-    id: row.id,
-    userId: row.user_id,
-    name,
-    templateId: row.template_id,
-    format: row.format,
-    aspectRatio: '4:5',
-    caption: parseCreatorCaption(row.caption),
-    data,
-    createdAt,
-    updatedAt,
-  };
 }
 
 /** A post is exactly one slide; a carousel may hold up to the cap. */

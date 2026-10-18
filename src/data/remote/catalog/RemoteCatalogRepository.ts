@@ -255,6 +255,10 @@ const IN_OTT_TV_PROVIDERS = '8|119|2336|232|237|350|11|561|315|532|623';
  * serials do not (C.I.D. 32, Taarak Mehta 41, Kundali Bhagya 4).
  */
 const HINDI_SHOW_MIN_VOTES = 45;
+/** Flops: bad on average but actually watched (keeps 0.0-vote curiosities out). */
+const FLOP_MIN_VOTES = 500;
+/** Best-of-year floor: enough votes that a score reflects an audience. */
+const YEAR_MIN_VOTES = 200;
 
 export class RemoteCatalogRepository implements CatalogRepositoryContract {
   async search(query: string, filter: CatalogFilter, signal?: AbortSignal): Promise<CatalogSearchResult> {
@@ -1109,6 +1113,76 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
       items: releasedOnly(interleaveRanked(groups, size * 2)),
       page: safePage,
       totalPages: RemoteCatalogRepository.maxPages(totals.length ? Math.max(...totals) : 1),
+    };
+  }
+
+  /**
+   * All-time top-rated, mixed. TMDb's own `top_rated` lists are built from
+   * average scores with real vote weight, so the ranking is honest — no local
+   * re-sorting. Hollywood and Bollywood both join so the list never reads as
+   * English-only.
+   */
+  async getTopRatedTitlesPage(page: number, signal?: AbortSignal): Promise<PagedCatalog> {
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const [movies, tv] = await Promise.all([
+      tmdbClient.topRatedMovies(safePage, signal),
+      tmdbClient.topRatedTv(safePage, signal),
+    ]);
+    const size = 20;
+    return {
+      items: releasedOnly(interleaveRanked([
+        (movies.results ?? []).slice(0, size).map(mapTmdbMovie),
+        (tv.results ?? []).slice(0, size).map(mapTmdbTv),
+      ], size * 2)),
+      page: safePage,
+      totalPages: RemoteCatalogRepository.maxPages(Math.max(movies.total_pages ?? 1, tv.total_pages ?? 1)),
+    };
+  }
+
+  /**
+   * Flops: the worst-rated released titles that still found an audience. The
+   * vote floor (`FLOP_MIN_VOTES`) keeps no-name 0.0 entries out; what remains
+   * is tried-and-missed — the "everyone watched, nobody loved" shelf.
+   */
+  async getFlopsPage(page: number, signal?: AbortSignal): Promise<PagedCatalog> {
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const [movies, tv] = await Promise.all([
+      tmdbClient.discoverMovies(safePage, { language: 'en', sortBy: 'vote_average.asc', voteCountGte: FLOP_MIN_VOTES }, signal),
+      tmdbClient.discoverTv(safePage, { language: 'en', sortBy: 'vote_average.asc', voteCountGte: FLOP_MIN_VOTES }, signal),
+    ]);
+    const size = 20;
+    return {
+      items: releasedOnly(interleaveRanked([
+        (movies.results ?? []).slice(0, size).map(mapTmdbMovie),
+        (tv.results ?? []).slice(0, size).map(mapTmdbTv),
+      ], size * 2)),
+      page: safePage,
+      totalPages: RemoteCatalogRepository.maxPages(Math.max(movies.total_pages ?? 1, tv.total_pages ?? 1)),
+    };
+  }
+
+  /**
+   * Best of one calendar year: average score first, with a vote floor so a
+   * single 10/10 vote can never top the year. Hollywood, Bollywood, and TV
+   * all join; unreleased titles are dropped like every other discovery feed.
+   */
+  async getYearPage(page: number, year: number, signal?: AbortSignal): Promise<PagedCatalog> {
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeYear = Number.isSafeInteger(year) ? year : new Date().getFullYear();
+    const [movies, moviesHi, tv] = await Promise.all([
+      tmdbClient.discoverMovies(safePage, { language: 'en', primaryReleaseYear: safeYear, sortBy: 'vote_average.desc', voteCountGte: YEAR_MIN_VOTES }, signal),
+      tmdbClient.discoverMovies(safePage, { language: 'hi', primaryReleaseYear: safeYear, sortBy: 'vote_average.desc', voteCountGte: Math.round(YEAR_MIN_VOTES / 4) }, signal),
+      tmdbClient.discoverTv(safePage, { language: 'en', firstAirDateYear: safeYear, sortBy: 'vote_average.desc', voteCountGte: YEAR_MIN_VOTES }, signal),
+    ]);
+    const size = 20;
+    return {
+      items: releasedOnly(interleaveRanked([
+        (movies.results ?? []).slice(0, size).map(mapTmdbMovie),
+        (tv.results ?? []).slice(0, size).map(mapTmdbTv),
+        (moviesHi.results ?? []).slice(0, size).map(mapTmdbMovie),
+      ], size * 2)),
+      page: safePage,
+      totalPages: RemoteCatalogRepository.maxPages(Math.max(movies.total_pages ?? 1, moviesHi.total_pages ?? 1, tv.total_pages ?? 1)),
     };
   }
 }

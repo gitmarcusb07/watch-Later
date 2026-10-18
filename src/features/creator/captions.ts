@@ -55,12 +55,33 @@ export function suggestCaptions(input: CaptionInput): CaptionSuggestion[] {
       suggestions.push({ label: 'Weekend plan', text: 'Weekend plans: cancelled. Series queued. 📺' });
       break;
     case 'top5':
-    case 'top10':
       suggestions.push({
-        label: input.templateId === 'top5' ? 'Ranked five' : 'Ranked ten',
-        text: `My ${input.templateId === 'top5' ? 'top 5' : 'top 10'} right now — how many have you seen? 🏆\n\n${numberedLines(refs)}`,
+        label: 'Ranked five',
+        text: `My top 5 right now — how many have you seen? 🏆\n\n${numberedLines(refs)}`,
       });
-      suggestions.push({ label: 'Debate bait', text: `${input.templateId === 'top5' ? 'Five' : 'Ten'} picks, zero regrets. Tell me what I got wrong 👇` });
+      suggestions.push({ label: 'Debate bait', text: 'Five picks, zero regrets. Tell me what I got wrong 👇' });
+      break;
+    case 'stacked-ranking':
+      suggestions.push({
+        label: 'The stack',
+        text: count
+          ? `The stack right now — how many have you seen? 🏆\n\n${numberedLines(refs)}`
+          : 'The stack right now — how many have you seen? 🏆',
+      });
+      suggestions.push({ label: 'Debate bait', text: 'All of these, in this order. Tell me what I got wrong 👇' });
+      break;
+    case 'collage-cover':
+      suggestions.push({
+        label: 'Cover post',
+        text: count
+          ? `The ones that defined the era — how many have you watched? 🎬\n\n${numberedLines(refs)}`
+          : 'The ones that defined the era — how many have you watched? 🎬',
+      });
+      suggestions.push({ label: 'Swipe prompt', text: 'Swipe through — and tell me which one I missed 👇' });
+      break;
+    case 'page-promo':
+      suggestions.push({ label: 'Follow call', text: 'Daily picks, zero filler. Follow so you never miss one 🍿' });
+      suggestions.push({ label: 'Page intro', text: 'One page, every pick worth your night. Hit follow and stay for the lists 📌' });
       break;
     case 'movie-comparison':
       suggestions.push({

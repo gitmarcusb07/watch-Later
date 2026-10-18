@@ -47,6 +47,7 @@ export function SlideRail({ templateId, data, slides, index, canAddSlide, onSele
                 theme={data.theme}
                 accentId={data.accentId}
                 showBranding={data.showBranding}
+                branding={data.branding}
                 slide={slide}
                 width={THUMB_WIDTH}
               />

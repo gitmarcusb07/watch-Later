@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
-import type { CreatorAccentId, CreatorSlide, CreatorTemplateId, CreatorTheme } from '@/domain/models/creator';
+import { CREATOR_DEFAULT_BRANDING, type CreatorAccentId, type CreatorBranding, type CreatorSlide, type CreatorTemplateId, type CreatorTheme } from '@/domain/models/creator';
 import { SLIDE_BASE_HEIGHT, SLIDE_BASE_WIDTH } from '@/features/creator/exportPlan';
 import { creatorPalette } from './palette';
 import { renderSlideTemplate } from './templates';
@@ -12,15 +12,19 @@ import { renderSlideTemplate } from './templates';
  * stage renders at the base size and `react-native-view-shot` captures it at
  * 3x (1080 x 1350). Template internals never depend on the render size.
  *
+ * A slide renders with its own `layout` when one is set, else the project's
+ * template — mixed carousels (cover → stack → promo) dispatch per slide.
+ *
  * Props are the primitives a slide actually needs (not the whole project) so
  * memoization survives edits to other slides: an untouched slide keeps its
  * identity and skips re-rendering.
  */
-export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId, theme, accentId, showBranding, slide, width = SLIDE_BASE_WIDTH, radius = 0 }: {
+export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId, theme, accentId, showBranding, branding = CREATOR_DEFAULT_BRANDING, slide, width = SLIDE_BASE_WIDTH, radius = 0 }: {
   templateId: CreatorTemplateId;
   theme: CreatorTheme;
   accentId: CreatorAccentId;
   showBranding: boolean;
+  branding?: CreatorBranding;
   slide: CreatorSlide;
   width?: number;
   radius?: number;
@@ -45,7 +49,7 @@ export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId,
           pointerEvents="none"
         />
         <View style={[styles.ring, { borderColor: palette.surfaceBorder }]} pointerEvents="none" />
-        {renderSlideTemplate(templateId, slide, palette, showBranding)}
+        {renderSlideTemplate(slide.layout ?? templateId, slide, palette, showBranding, branding)}
       </View>
     </View>
   );

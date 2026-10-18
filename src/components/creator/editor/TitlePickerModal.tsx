@@ -1,35 +1,62 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { FlatList, Image, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppButton } from '@/components/buttons/AppButton';
 import { AppText } from '@/components/common/AppText';
 import { ErrorView, LoadingView } from '@/components/feedback/FeedbackViews';
 import { SegmentedTabs } from '@/components/creator/editor/controls';
-import { useCatalogSearch, useTrending } from '@/features/catalog/hooks';
+import { useCatalogSearch, useFlopPages, useRecentlyReleased, useTopRatedTitlesPages, useTrendingAllPages, useYearPages } from '@/features/catalog/hooks';
+import { useGenrePages } from '@/features/genres/hooks';
+import { GENRES } from '@/features/genres/catalog';
+import { enrichTitleRefsWithImdb } from '@/features/creator/imdbEnrichment';
 import { titleRefFromMedia } from '@/features/creator/titleRefs';
 import { creatorTemplate } from '@/features/creator/templates';
 import { formatMaxSlides } from '@/features/creator/validation';
 import { creatorTitleKey, type CreatorFormat, type CreatorTemplateId, type CreatorTitleRef } from '@/domain/models/creator';
+import type { PagedCatalog } from '@/domain/repositories/CatalogRepository';
+import type { CatalogMedia } from '@/domain/models/media';
 import { useCustomList, useCustomLists, useWatchlist } from '@/features/watchState/hooks';
 import { triggerLightHaptic } from '@/lib/haptics';
 import { colors, radius, spacing, typography } from '@/theme';
 
 /**
- * Multi-select title picker for the editor. Every source is one of the app's
- * existing cached reads (catalog search, watchlist, custom lists, trending)
- * and only the visible tab is fetched. Selections are snapshotted into
- * `CreatorTitleRef`s on confirm so drafts stay renderable offline.
+ * Multi-select title picker for the editor. It opens on suggestions, already
+ * filled — popular, top rated, flops, new, by year, by genre — so picking a
+ * title never starts with a blank search box. Search, the watchlist, and
+ * custom lists remain one tab away. Everything is one of the app's existing
+ * cached reads; selections are snapshotted into `CreatorTitleRef`s on confirm
+ * (with a real IMDb score attached when a match exists) so drafts stay fully
+ * renderable offline.
  */
 
-type PickerTab = 'search' | 'watchlist' | 'lists' | 'picks';
+type PickerTab = 'suggestions' | 'search' | 'watchlist' | 'lists';
 
 const TABS: { value: PickerTab; label: string }[] = [
+  { value: 'suggestions', label: 'Suggestions' },
   { value: 'search', label: 'Search' },
   { value: 'watchlist', label: 'Watchlist' },
   { value: 'lists', label: 'Lists' },
-  { value: 'picks', label: 'Top picks' },
 ];
+
+type SuggestionSource = 'popular' | 'top-rated' | 'flops' | 'new';
+
+const SOURCES: { value: SuggestionSource; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { value: 'popular', label: 'Popular', icon: 'flame-outline' },
+  { value: 'top-rated', label: 'Top rated', icon: 'star-outline' },
+  { value: 'flops', label: 'Flops', icon: 'thumbs-down-outline' },
+  { value: 'new', label: 'New', icon: 'sparkles-outline' },
+];
+
+const SUGGESTION_COPY: Record<SuggestionSource, { error: string; empty: string }> = {
+  popular: { error: 'Couldn’t load what’s popular right now. Check your connection and try again.', empty: 'Popular titles are unavailable right now.' },
+  'top-rated': { error: 'Couldn’t load top-rated titles. Check your connection and try again.', empty: 'Top-rated titles are unavailable right now.' },
+  flops: { error: 'Couldn’t load the flop shelf. Check your connection and try again.', empty: 'The flop shelf is empty right now.' },
+  new: { error: 'Couldn’t load new releases. Check your connection and try again.', empty: 'No fresh releases found right now.' },
+};
+
+const CURRENT_YEAR = new Date().getFullYear();
+const YEARS = Array.from({ length: 14 }, (_, index) => CURRENT_YEAR - index);
 
 export function TitlePickerModal({ templateId, format, existingKeys, onClose, onConfirm }: {
   templateId: CreatorTemplateId;
@@ -40,11 +67,15 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
   onConfirm: (refs: CreatorTitleRef[]) => void;
 }) {
   const template = creatorTemplate(templateId);
-  const [tab, setTab] = useState<PickerTab>(template.maxTitles > 1 ? 'watchlist' : 'search');
+  const [tab, setTab] = useState<PickerTab>('suggestions');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [selected, setSelected] = useState<Map<string, CreatorTitleRef>>(() => new Map());
   const [activeListId, setActiveListId] = useState<string | undefined>(undefined);
+  const [source, setSource] = useState<SuggestionSource>('popular');
+  const [focusYear, setFocusYear] = useState<number | undefined>(undefined);
+  const [focusGenreId, setFocusGenreId] = useState<number | undefined>(undefined);
+  const [confirming, setConfirming] = useState(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const existing = useMemo(() => new Set(existingKeys), [existingKeys]);
 
@@ -59,12 +90,26 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
     debounceTimer.current = setTimeout(() => setDebouncedQuery(next), 320);
   };
 
-  // Only the active tab's source runs; every other hook is disabled.
+  // Which suggestion rail is showing. A tapped year or genre wins over the
+  // base source chip; tapping the active one again falls back to the chip.
+  const activeSuggestion: SuggestionSource | 'year' | 'genre' =
+    focusGenreId !== undefined ? 'genre' : focusYear !== undefined ? 'year' : source;
+  const onSuggestions = tab === 'suggestions';
+  const activeGenre = focusGenreId !== undefined ? GENRES.find((entry) => entry.id === focusGenreId) : undefined;
+
+  // Only the active tab's (and active rail's) sources run; every other hook is
+  // disabled. Paged rails load more on scroll; all of them are abortable via
+  // the query signal when the modal closes.
   const search = useCatalogSearch(debouncedQuery, 'all', tab === 'search');
   const watchlist = useWatchlist(tab === 'watchlist');
   const lists = useCustomLists(tab === 'lists');
   const listDetail = useCustomList(activeListId, tab === 'lists');
-  const trending = useTrending(tab === 'picks');
+  const popular = useTrendingAllPages(onSuggestions && activeSuggestion === 'popular');
+  const topRated = useTopRatedTitlesPages(onSuggestions && activeSuggestion === 'top-rated');
+  const flops = useFlopPages(onSuggestions && activeSuggestion === 'flops');
+  const fresh = useRecentlyReleased(onSuggestions && activeSuggestion === 'new');
+  const yearPages = useYearPages(focusYear ?? CURRENT_YEAR, onSuggestions && activeSuggestion === 'year');
+  const genrePages = useGenrePages(focusGenreId ?? GENRES[0].id, 'all', onSuggestions && activeSuggestion === 'genre');
 
   const toggle = (ref: CreatorTitleRef) => {
     const key = creatorTitleKey(ref);
@@ -77,19 +122,39 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
     });
   };
 
-  const source = resolveSource({
-    tab,
-    query,
-    debouncedQuery,
-    search,
-    watchlist,
-    lists,
-    listDetail,
-    trending,
-    activeListId,
-  });
+  const suggestionCopy = useMemo(() => {
+    if (activeSuggestion === 'year' && focusYear) return { error: `Couldn’t load ${focusYear}. Check your connection and try again.`, empty: `Nothing from ${focusYear} yet — try another year.` };
+    if (activeSuggestion === 'genre' && activeGenre) return { error: `Couldn’t load ${activeGenre.name}. Check your connection and try again.`, empty: `Nothing found in ${activeGenre.name}.` };
+    return SUGGESTION_COPY[activeSuggestion as SuggestionSource] ?? SUGGESTION_COPY.popular;
+  }, [activeSuggestion, activeGenre, focusYear]);
+
+  const pickerSource = useMemo<PickerSource>(() => {
+    if (tab === 'suggestions') {
+      if (activeSuggestion === 'new') return plainSource(fresh, suggestionCopy);
+      const paged = activeSuggestion === 'popular' ? popular
+        : activeSuggestion === 'top-rated' ? topRated
+        : activeSuggestion === 'flops' ? flops
+        : activeSuggestion === 'year' ? yearPages
+        : genrePages;
+      return pagedSource(paged, suggestionCopy);
+    }
+    return resolveLocalSource({ tab, query, debouncedQuery, search, watchlist, lists, listDetail, activeListId });
+  }, [tab, activeSuggestion, popular, topRated, flops, yearPages, genrePages, fresh, suggestionCopy, query, debouncedQuery, search, watchlist, lists, listDetail, activeListId]);
 
   const selectedRefs = useMemo(() => [...selected.values()], [selected]);
+
+  async function confirmSelection() {
+    if (!selectedRefs.length || confirming) return;
+    setConfirming(true);
+    try {
+      // Match real IMDb scores first (never throws, offline-safe) so saved
+      // refs carry the score into the draft; TMDb stays the fallback badge.
+      const enriched = await enrichTitleRefsWithImdb(selectedRefs);
+      onConfirm(enriched);
+    } finally {
+      setConfirming(false);
+    }
+  }
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
@@ -104,6 +169,64 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
           {template.name} · up to {template.maxTitles} per slide · {formatMaxSlides(format)} slide{formatMaxSlides(format) === 1 ? '' : 's'} max
         </AppText>
         <View style={styles.tabs}><SegmentedTabs options={TABS} value={tab} onChange={setTab} /></View>
+        {tab === 'suggestions' ? (
+          <View style={styles.rails}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.railContent} keyboardShouldPersistTaps="handled">
+              {SOURCES.map((entry) => {
+                const active = !focusYear && focusGenreId === undefined && source === entry.value;
+                return (
+                  <Pressable
+                    key={entry.value}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`Suggested: ${entry.label}`}
+                    onPress={() => { triggerLightHaptic(); setSource(entry.value); setFocusYear(undefined); setFocusGenreId(undefined); }}
+                    style={[styles.listChip, active && styles.listChipActive]}
+                  >
+                    <Ionicons name={entry.icon} size={13} color={active ? colors.accent : colors.textMuted} />
+                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{entry.label}</AppText>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.railContent} keyboardShouldPersistTaps="handled">
+              <AppText variant="caption" muted style={styles.railLabel}>YEAR</AppText>
+              {YEARS.map((year) => {
+                const active = focusYear === year;
+                return (
+                  <Pressable
+                    key={year}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`Year ${year}`}
+                    onPress={() => { triggerLightHaptic(); setFocusGenreId(undefined); setFocusYear(active ? undefined : year); }}
+                    style={[styles.yearChip, active && styles.listChipActive]}
+                  >
+                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{year}</AppText>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.railContent} keyboardShouldPersistTaps="handled">
+              <AppText variant="caption" muted style={styles.railLabel}>GENRE</AppText>
+              {GENRES.map((genre) => {
+                const active = focusGenreId === genre.id;
+                return (
+                  <Pressable
+                    key={genre.id}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`Genre ${genre.name}`}
+                    onPress={() => { triggerLightHaptic(); setFocusYear(undefined); setFocusGenreId(active ? undefined : genre.id); }}
+                    style={[styles.yearChip, active && styles.listChipActive]}
+                  >
+                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{genre.name}</AppText>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        ) : null}
         {tab === 'search' ? (
           <View style={styles.searchWrap}>
             <Ionicons name="search" size={19} color={query ? colors.accent : colors.textMuted} />
@@ -126,17 +249,12 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
           </View>
         ) : null}
         {tab === 'lists' && lists.data?.length ? (
-          <FlatList
-            horizontal
-            data={lists.data}
-            keyExtractor={(item) => item.id}
-            showsHorizontalScrollIndicator={false}
-            style={styles.listChips}
-            contentContainerStyle={styles.listChipsContent}
-            renderItem={({ item }) => {
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.listChips} contentContainerStyle={styles.listChipsContent} keyboardShouldPersistTaps="handled">
+            {lists.data.map((item) => {
               const active = item.id === activeListId;
               return (
                 <Pressable
+                  key={item.id}
                   accessibilityRole="tab"
                   accessibilityState={{ selected: active }}
                   accessibilityLabel={`${item.name}, ${item.itemCount} titles`}
@@ -147,19 +265,20 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
                   <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{item.name}</AppText>
                 </Pressable>
               );
-            }}
-          />
+            })}
+          </ScrollView>
         ) : null}
         <View style={styles.body}>
-          <PickerBody source={source} onRetry={source.retry ?? (() => undefined)} onToggle={toggle} selected={selected} existing={existing} />
+          <PickerBody source={pickerSource} onRetry={pickerSource.retry ?? (() => undefined)} onToggle={toggle} selected={selected} existing={existing} />
         </View>
         <View style={styles.footer}>
-          <AppText variant="caption" muted>{selected.size ? `${selected.size} selected` : 'Tap titles to select'}</AppText>
+          <AppText variant="caption" muted>{confirming ? 'Matching IMDb scores…' : selected.size ? `${selected.size} selected` : 'Tap titles to select'}</AppText>
           <View style={styles.footerButton}>
             <AppButton
               label={selected.size === 1 ? 'Add 1 title' : `Add ${selected.size} titles`}
               disabled={selected.size === 0}
-              onPress={() => onConfirm(selectedRefs)}
+              loading={confirming}
+              onPress={() => void confirmSelection()}
             />
           </View>
         </View>
@@ -173,9 +292,66 @@ interface PickerSource {
   message?: string;
   retry?: () => void;
   rows: CreatorTitleRef[];
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
-function resolveSource(input: {
+/** Infinite-query shape shared by every paged suggestion rail. */
+interface PagedQuery {
+  data?: { pages: readonly PagedCatalog[] };
+  isLoading: boolean;
+  isError: boolean;
+  isFetchingNextPage: boolean;
+  hasNextPage: boolean;
+  refetch: () => unknown;
+  fetchNextPage: () => unknown;
+}
+
+interface PlainQuery {
+  data?: readonly CatalogMedia[];
+  isLoading: boolean;
+  isError: boolean;
+  refetch: () => unknown;
+}
+
+/** Flattens paged rows, dropping repeats that appeared on an earlier page. */
+function refsFromPages(pages: readonly PagedCatalog[]): CreatorTitleRef[] {
+  const seen = new Set<string>();
+  const rows: CreatorTitleRef[] = [];
+  for (const page of pages) {
+    for (const media of page.items) {
+      const ref = titleRefFromMedia(media);
+      const key = creatorTitleKey(ref);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(ref);
+    }
+  }
+  return rows;
+}
+
+function pagedSource(query: PagedQuery, copy: { error: string; empty: string }): PickerSource {
+  const rows = refsFromPages(query.data?.pages ?? []);
+  if (!rows.length && query.isLoading) return { kind: 'loading', rows: [] };
+  if (!rows.length && query.isError) return { kind: 'error', message: copy.error, retry: () => void query.refetch(), rows: [] };
+  if (!rows.length) return { kind: 'empty', message: copy.empty, rows: [] };
+  return {
+    kind: 'rows',
+    rows,
+    loadingMore: query.isFetchingNextPage,
+    onLoadMore: query.hasNextPage && !query.isFetchingNextPage ? () => void query.fetchNextPage() : undefined,
+  };
+}
+
+function plainSource(query: PlainQuery, copy: { error: string; empty: string }): PickerSource {
+  const items = query.data ?? [];
+  if (!items.length && query.isLoading) return { kind: 'loading', rows: [] };
+  if (!items.length && query.isError) return { kind: 'error', message: copy.error, retry: () => void query.refetch(), rows: [] };
+  const rows = refsFromPages([{ items: [...items], page: 1, totalPages: 1 }]);
+  return rows.length ? { kind: 'rows', rows } : { kind: 'empty', message: copy.empty, rows: [] };
+}
+
+function resolveLocalSource(input: {
   tab: PickerTab;
   query: string;
   debouncedQuery: string;
@@ -183,7 +359,6 @@ function resolveSource(input: {
   watchlist: ReturnType<typeof useWatchlist>;
   lists: ReturnType<typeof useCustomLists>;
   listDetail: ReturnType<typeof useCustomList>;
-  trending: ReturnType<typeof useTrending>;
   activeListId: string | undefined;
 }): PickerSource {
   const { tab } = input;
@@ -205,23 +380,16 @@ function resolveSource(input: {
     const rows = entries.map((entry) => titleRefFromMedia(entry.media));
     return rows.length ? { kind: 'rows', rows } : { kind: 'empty', message: 'Your watchlist is empty. Save titles from Search and they can join a post.', rows: [] };
   }
-  if (tab === 'lists') {
-    const lists = input.lists.data ?? [];
-    if (!lists.length && input.lists.isLoading) return { kind: 'loading', rows: [] };
-    if (!lists.length && input.lists.isError) return { kind: 'error', message: 'Couldn’t read your lists. Please try again.', retry: () => void input.lists.refetch(), rows: [] };
-    if (!lists.length) return { kind: 'empty', message: 'You haven’t made any lists yet. Create one from the Watchlist tab’s “New list”.', rows: [] };
-    if (!input.activeListId) return { kind: 'empty', message: 'Pick a list above to browse its titles.', rows: [] };
-    const detail = input.listDetail.data;
-    if (!detail && input.listDetail.isLoading) return { kind: 'loading', rows: [] };
-    if (!detail) return { kind: 'error', message: 'Couldn’t open that list. Please try again.', retry: () => void input.listDetail.refetch(), rows: [] };
-    const rows = detail.items.map((item) => titleRefFromMedia(item.media));
-    return rows.length ? { kind: 'rows', rows } : { kind: 'empty', message: 'This list has no titles yet.', rows: [] };
-  }
-  const trending = input.trending.data ?? [];
-  if (!trending.length && input.trending.isLoading) return { kind: 'loading', rows: [] };
-  if (!trending.length && input.trending.isError) return { kind: 'error', message: 'Couldn’t load trending titles. Check your connection and try again.', retry: () => void input.trending.refetch(), rows: [] };
-  const rows = trending.map(titleRefFromMedia);
-  return rows.length ? { kind: 'rows', rows } : { kind: 'empty', message: 'Trending titles are unavailable right now.', rows: [] };
+  const lists = input.lists.data ?? [];
+  if (!lists.length && input.lists.isLoading) return { kind: 'loading', rows: [] };
+  if (!lists.length && input.lists.isError) return { kind: 'error', message: 'Couldn’t read your lists. Please try again.', retry: () => void input.lists.refetch(), rows: [] };
+  if (!lists.length) return { kind: 'empty', message: 'You haven’t made any lists yet. Create one from the Watchlist tab’s “New list”.', rows: [] };
+  if (!input.activeListId) return { kind: 'empty', message: 'Pick a list above to browse its titles.', rows: [] };
+  const detail = input.listDetail.data;
+  if (!detail && input.listDetail.isLoading) return { kind: 'loading', rows: [] };
+  if (!detail) return { kind: 'error', message: 'Couldn’t open that list. Please try again.', retry: () => void input.listDetail.refetch(), rows: [] };
+  const rows = detail.items.map((item) => titleRefFromMedia(item.media));
+  return rows.length ? { kind: 'rows', rows } : { kind: 'empty', message: 'This list has no titles yet.', rows: [] };
 }
 
 function PickerBody({ source, selected, existing, onToggle, onRetry }: {
@@ -247,7 +415,10 @@ function PickerBody({ source, selected, existing, onToggle, onRetry }: {
       keyExtractor={(item) => creatorTitleKey(item)}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
+      onEndReached={source.onLoadMore}
+      onEndReachedThreshold={0.6}
       contentContainerStyle={styles.rowsContent}
+      ListFooterComponent={source.loadingMore ? <View style={styles.more}><ActivityIndicator color={colors.accent} /></View> : null}
       renderItem={({ item }) => (
         <PickerRow titleRef={item} selected={selected.has(creatorTitleKey(item))} onSlide={existing.has(creatorTitleKey(item))} onToggle={() => { triggerLightHaptic(); onToggle(item); }} />
       )}
@@ -262,7 +433,10 @@ function PickerRow({ titleRef, selected, onSlide, onToggle }: {
   onToggle: () => void;
 }) {
   const [failed, setFailed] = useState(false);
-  const meta = [titleRef.year, titleRef.mediaType === 'movie' ? 'Movie' : titleRef.mediaType === 'series' ? 'Series' : 'Anime', typeof titleRef.rating === 'number' ? `★ ${titleRef.rating.toFixed(1)}` : undefined].filter(Boolean).join(' · ');
+  const score = typeof titleRef.imdbRating === 'number' && titleRef.imdbRating > 0
+    ? `IMDb ${titleRef.imdbRating.toFixed(1)}`
+    : typeof titleRef.rating === 'number' && titleRef.rating > 0 ? `★ ${titleRef.rating.toFixed(1)}` : undefined;
+  const meta = [titleRef.year, titleRef.mediaType === 'movie' ? 'Movie' : titleRef.mediaType === 'series' ? 'Series' : 'Anime', score].filter(Boolean).join(' · ');
   return (
     <Pressable
       accessibilityRole="checkbox"
@@ -297,16 +471,21 @@ const styles = StyleSheet.create({
   close: { width: 40, height: 40, borderRadius: radius.pill, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center' },
   hint: { paddingHorizontal: spacing.xl, paddingTop: spacing.xs },
   tabs: { paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: spacing.sm },
+  rails: { gap: spacing.xs, paddingBottom: spacing.sm },
+  railContent: { paddingHorizontal: spacing.xl, gap: spacing.sm, alignItems: 'center' },
+  railLabel: { letterSpacing: 1, marginRight: spacing.xs },
+  yearChip: { paddingHorizontal: spacing.md, paddingVertical: 5, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   searchWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.xl, marginBottom: spacing.sm, paddingHorizontal: spacing.lg, minHeight: 48, borderRadius: radius.medium, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   searchInput: { flex: 1, color: colors.textPrimary, ...typography.body, fontSize: 15 },
   listChips: { flexGrow: 0, marginBottom: spacing.sm },
-  listChipsContent: { paddingHorizontal: spacing.xl, gap: spacing.sm },
+  listChipsContent: { paddingHorizontal: spacing.xl, gap: spacing.sm, alignItems: 'center' },
   listChip: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   listChipActive: { borderColor: colors.accent, backgroundColor: 'rgba(168,85,247,0.12)' },
   body: { flex: 1 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
   emptyText: { textAlign: 'center', maxWidth: 280, lineHeight: 21 },
   rowsContent: { paddingHorizontal: spacing.xl, paddingBottom: spacing.md },
+  more: { paddingVertical: spacing.lg },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 68, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   rowPressed: { opacity: 0.75 },
   rowDisabled: { opacity: 0.45 },

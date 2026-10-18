@@ -1,7 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { AppError } from '@/domain/errors/AppError';
 
-export const DATABASE_VERSION = 17;
+export const DATABASE_VERSION = 18;
 
 const migrations: Record<number, readonly string[]> = {
   1: [
@@ -279,6 +279,22 @@ const migrations: Record<number, readonly string[]> = {
   // cloud tombstone so the two libraries stay in step. Rows are rewritten in
   // TypeScript below because the queued payload carries a JSON media snapshot.
   17: [],
+  // Creator Studio drafts, kept on-device only: no account, no network. Rows
+  // store the validated project JSON plus the summary columns the studio home
+  // renders, so the drafts list never deserializes slide payloads.
+  18: [
+    `CREATE TABLE IF NOT EXISTS creator_drafts (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      template_id TEXT NOT NULL,
+      format TEXT NOT NULL CHECK (format IN ('post', 'carousel')),
+      caption TEXT NOT NULL DEFAULT '',
+      slide_data TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`,
+    `CREATE INDEX IF NOT EXISTS idx_creator_drafts_updated_at ON creator_drafts(updated_at DESC);`,
+  ],
 };
 
 /** Columns the v17 overlap purge reads from `tracked_media`. */

@@ -16,6 +16,11 @@ export interface CreatorTemplateMeta {
   tagline: string;
   /** Ionicons glyph name (kept as a string so this module stays UI-library free). */
   icon: string;
+  /**
+   * Where the layout sits in a carousel: cover slides open it, content slides
+   * carry the picks, promo slides close with a follow call-to-action.
+   */
+  kind: 'cover' | 'content' | 'promo';
   defaultFormat: CreatorFormat;
   /** Titles allowed on one slide. */
   minTitles: number;
@@ -31,10 +36,56 @@ export interface CreatorTemplateMeta {
 
 export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
   {
+    id: 'collage-cover',
+    name: 'Cover collage',
+    tagline: 'Poster collage with a giant headline',
+    icon: 'images-outline',
+    kind: 'cover',
+    defaultFormat: 'carousel',
+    minTitles: 1,
+    maxTitles: 5,
+    defaultSlides: 1,
+    maxSlides: CREATOR_MAX_SLIDES,
+    defaultHeadline: 'MOST ICONIC PICKS',
+    defaultSubtitle: 'The ones that defined the era',
+    defaultClosing: 'Swipe for the full list →',
+  },
+  {
+    id: 'stacked-ranking',
+    name: 'Stacked list',
+    tagline: 'Full-bleed rows with year and rating badges',
+    icon: 'albums-outline',
+    kind: 'content',
+    defaultFormat: 'carousel',
+    minTitles: 1,
+    maxTitles: 5,
+    defaultSlides: 1,
+    maxSlides: CREATOR_MAX_SLIDES,
+    defaultHeadline: 'MOST WATCHED',
+    defaultSubtitle: '',
+    defaultClosing: '',
+  },
+  {
+    id: 'page-promo',
+    name: 'Follow card',
+    tagline: 'Brand profile card and a follow call-to-action',
+    icon: 'heart-outline',
+    kind: 'promo',
+    defaultFormat: 'carousel',
+    minTitles: 0,
+    maxTitles: 1,
+    defaultSlides: 1,
+    maxSlides: CREATOR_MAX_SLIDES,
+    defaultHeadline: 'FOLLOW FOR MORE',
+    defaultSubtitle: 'Daily picks, straight from my watchlist',
+    defaultClosing: 'Follow for daily picks',
+  },
+  {
     id: 'movie-spotlight',
     name: 'Movie spotlight',
     tagline: 'One movie, big poster energy',
     icon: 'film-outline',
+    kind: 'content',
     defaultFormat: 'post',
     minTitles: 0,
     maxTitles: 1,
@@ -49,6 +100,7 @@ export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
     name: 'Series spotlight',
     tagline: 'One show, binge-ready framing',
     icon: 'tv-outline',
+    kind: 'content',
     defaultFormat: 'post',
     minTitles: 0,
     maxTitles: 1,
@@ -63,6 +115,7 @@ export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
     name: 'Top 5 recommendations',
     tagline: 'A ranked five, stacked and scannable',
     icon: 'podium-outline',
+    kind: 'content',
     defaultFormat: 'post',
     minTitles: 1,
     maxTitles: 5,
@@ -73,24 +126,11 @@ export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
     defaultClosing: 'Save this list',
   },
   {
-    id: 'top10',
-    name: 'Top 10 recommendations',
-    tagline: 'A two-column ranked ten',
-    icon: 'list-outline',
-    defaultFormat: 'post',
-    minTitles: 1,
-    maxTitles: 10,
-    defaultSlides: 1,
-    maxSlides: CREATOR_MAX_SLIDES,
-    defaultHeadline: 'TOP 10',
-    defaultSubtitle: 'The only list you need this month',
-    defaultClosing: 'Follow for more picks',
-  },
-  {
     id: 'movie-comparison',
     name: 'Movie comparison',
     tagline: 'Two movies, one head-to-head',
     icon: 'git-compare-outline',
+    kind: 'content',
     defaultFormat: 'post',
     minTitles: 2,
     maxTitles: 2,
@@ -105,9 +145,10 @@ export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
     name: 'Watchlist collection',
     tagline: 'Your saved titles as a grid',
     icon: 'bookmark-outline',
+    kind: 'content',
     defaultFormat: 'carousel',
     minTitles: 1,
-    maxTitles: 6,
+    maxTitles: 5,
     defaultSlides: 1,
     maxSlides: CREATOR_MAX_SLIDES,
     defaultHeadline: 'MY WATCHLIST',
@@ -119,6 +160,7 @@ export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
     name: 'Upcoming releases',
     tagline: 'What’s dropping next, dated',
     icon: 'calendar-outline',
+    kind: 'content',
     defaultFormat: 'carousel',
     minTitles: 1,
     maxTitles: 5,
@@ -142,9 +184,17 @@ export function creatorTemplate(id: CreatorTemplateId): CreatorTemplateMeta {
   return template;
 }
 
+/**
+ * The layout a slide renders with. Slides without an explicit override use the
+ * project's own template, so single-template projects keep working unchanged.
+ */
+export function slideLayoutOf(slide: { layout?: CreatorTemplateId }, templateId: CreatorTemplateId): CreatorTemplateId {
+  return slide.layout ?? templateId;
+}
+
 /** True when a slide should show the ranked-position marker. */
 export function templateRanksTitles(id: CreatorTemplateId): boolean {
-  return id === 'top5' || id === 'top10';
+  return id === 'top5';
 }
 
 /** True when a slide shows release dates as a first-class column. */

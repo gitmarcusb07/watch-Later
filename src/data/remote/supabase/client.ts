@@ -16,7 +16,6 @@ export interface Database {
       profiles: Table<{ id: string; created_at: string; updated_at: string }>;
       global_hit_reports: Table<CloudHitReportRow>;
       imdb_ratings: Table<CloudImdbRatingRow>;
-      creator_projects: Table<CloudCreatorProjectRow, Omit<CloudCreatorProjectRow, 'id' | 'created_at' | 'updated_at'>>;
     };
     Views: Record<string, never>;
     Functions: { get_interested_counts: { Args: Record<string, never>; Returns: { provider: string; media_type: string; provider_id: string; interested_count: number }[] } };
@@ -27,10 +26,9 @@ export interface Database {
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-type Table<Row, Insert = Row> = { Row: Row; Insert: Insert; Update: Partial<Row>; Relationships: [] };
+type Table<Row> = { Row: Row; Insert: Row; Update: Partial<Row>; Relationships: [] };
 type CloudMediaRow = { user_id: string; provider: string; media_type: string; provider_id: string; title: string; original_title: string | null; overview: string | null; poster_url: string | null; backdrop_url: string | null; release_date: string | null; year: number | null; genres: Json; number_of_seasons: number | null; number_of_episodes: number | null; season_summaries: Json; episode_metadata: string; updated_at: string };
 type CloudHitReportRow = { period_type: string; period_key: string; generated_at: string; retrieved_at: string; methodology: string; status: string; movie_items: Json; series_items: Json };
-type CloudCreatorProjectRow = { id: string; user_id: string; name: string; template_id: string; format: string; aspect_ratio: string; slide_data: Json; caption: string; created_at: string; updated_at: string };
 type CloudImdbRatingRow = { tmdb_id: number; media_type: string; imdb_id: string; title: string; year: number | null; poster_url: string | null; rating: number; votes: number; list_rank: number | null; updated_at: string };
 type CloudStateRow = { user_id: string; provider: string; media_type: string; provider_id: string; is_deleted: boolean; updated_at: string };
 type CloudEpisodeRow = { user_id: string; provider: string; episode_provider_id: string; series_provider: string; series_media_type: string; series_provider_id: string; season_number: number; episode_number: number; title: string; overview: string | null; air_date: string | null; still_url: string | null; runtime_minutes: number | null; watched_at: string | null; is_deleted: boolean; updated_at: string; rewatch_count?: number | null };

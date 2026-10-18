@@ -89,12 +89,28 @@ export function SlideKicker({ text, palette, style }: { text: string; palette: C
   );
 }
 
-/** The optional Watch Later wordmark burned into the slide. */
-export function BrandMark({ palette, style }: { palette: CreatorPalette; style?: StyleProp<ViewStyle> }) {
+/** The optional brand wordmark burned into the slide. Label defaults to the app name. */
+export function BrandMark({ palette, style, label }: { palette: CreatorPalette; style?: StyleProp<ViewStyle>; label?: string }) {
+  const text = (label?.trim() || 'Watch Later').toUpperCase();
   return (
     <View style={[styles.brandRow, style]} accessibilityElementsHidden>
       <View style={[styles.brandDot, { backgroundColor: palette.accent.primary }]} />
-      <SlideText style={[styles.brandText, { color: palette.textMuted }]}>WATCH LATER</SlideText>
+      <SlideText style={[styles.brandText, { color: palette.textMuted }]} numberOfLines={1}>{text}</SlideText>
+    </View>
+  );
+}
+
+/**
+ * Compact score pill used on photo-row templates. `imdb` renders the yellow
+ * IMDb chip (only when a real matched score exists); `score` renders the
+ * neutral TMDb star chip. Both sit on photography, so colors are fixed.
+ */
+export function RatingBadge({ variant, value }: { variant: 'imdb' | 'score'; value: string }) {
+  return (
+    <View style={[styles.ratingBadge, variant === 'imdb' ? styles.ratingBadgeImdb : styles.ratingBadgeScore]}>
+      {variant === 'imdb'
+        ? <SlideText style={styles.ratingBadgeImdbText}>{`IMDb ${value}`}</SlideText>
+        : <SlideText style={styles.ratingBadgeScoreText}>{`★ ${value}`}</SlideText>}
     </View>
   );
 }
@@ -157,4 +173,9 @@ const styles = StyleSheet.create({
   stack: { flex: 1, minWidth: 0, gap: 1 },
   stackTitle: { fontWeight: '700' },
   stackMeta: { fontWeight: '500', letterSpacing: 0.2 },
+  ratingBadge: { borderRadius: 5, paddingHorizontal: 5.5, paddingVertical: 2.5 },
+  ratingBadgeImdb: { backgroundColor: '#F5C518' },
+  ratingBadgeScore: { backgroundColor: 'rgba(10,6,18,0.55)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.28)' },
+  ratingBadgeImdbText: { fontSize: 9.5, lineHeight: 12, fontWeight: '800', color: '#151021', letterSpacing: 0.2 },
+  ratingBadgeScoreText: { fontSize: 9.5, lineHeight: 12, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.2 },
 });

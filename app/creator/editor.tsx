@@ -15,15 +15,14 @@ import { TitlePickerModal } from '@/components/creator/editor/TitlePickerModal';
 import { ExportSheet } from '@/components/creator/editor/ExportSheet';
 import { CaptionInspector, ContentInspector, StyleInspector, TitlesInspector } from '@/components/creator/editor/inspectors';
 import { useSlideExporter } from '@/components/creator/export/SlideExportStage';
-import { creatorTemplate, isCreatorTemplateId } from '@/features/creator/templates';
+import { creatorTemplate, isCreatorTemplateId, slideLayoutOf } from '@/features/creator/templates';
 import { createEditorState, defaultProjectName, previewAddTitles, useCreatorEditor, type CreatorEditorState } from '@/features/creator/useCreatorEditor';
-import { useCreatorProject, useSaveCreatorProject } from '@/features/creator/hooks';
+import { useCreatorDraft, useSaveCreatorDraft } from '@/features/creator/hooks';
 import { CREATOR_SEEDS, creatorSeedTarget, parseCreatorSeed, useCreatorSeed } from '@/features/creator/useCreatorSeed';
 import { isCreatorFormat } from '@/features/creator/validation';
 import { creatorTitleKey, CREATOR_MAX_NAME, type CreatorFormat, type CreatorTemplateId, type CreatorTitleRef } from '@/domain/models/creator';
 import { showFriendlyError } from '@/lib/friendlyError';
 import { triggerSuccessHaptic } from '@/lib/haptics';
-import { useSessionStore } from '@/store/app/sessionStore';
 import { CONTENT_MAX_WIDTH } from '@/theme/responsive';
 import { colors, spacing } from '@/theme';
 
@@ -51,14 +50,14 @@ export default function CreatorEditorRoute() {
   const templateId: CreatorTemplateId | undefined = isCreatorTemplateId(params.templateId) ? params.templateId : undefined;
   const format: CreatorFormat | undefined = isCreatorFormat(params.format) ? params.format : undefined;
 
-  const { isLoading: projectLoading, isError: projectFailed, data: project, refetch: refetchProject } = useCreatorProject(projectId);
+  const { isLoading: projectLoading, isError: projectFailed, data: project, refetch: refetchProject } = useCreatorDraft(projectId);
   const seed = useCreatorSeed(seedId);
 
   const resolved = useMemo<{ initial?: CreatorEditorState; blocking?: React.ReactElement; seeded?: { label: string; titleCount: number } }>(() => {
     if (projectId) {
       if (projectLoading) return { blocking: <LoadingView label="Opening your draft" /> };
-      if (projectFailed) return { blocking: <ErrorView message="Couldn’t open that draft. Check your connection and try again." onRetry={() => void refetchProject()} /> };
-      if (!project) return { blocking: <EmptyState icon="cloud-offline-outline" title="Draft unavailable" message="This draft was deleted or belongs to another account." actionLabel="Back to studio" onAction={() => router.replace('/creator')} /> };
+      if (projectFailed) return { blocking: <ErrorView message="Couldn’t open that draft on this device. Please try again." onRetry={() => void refetchProject()} /> };
+      if (!project) return { blocking: <EmptyState icon="save-outline" title="Draft unavailable" message="This draft was deleted from this device or could not be read." actionLabel="Back to studio" onAction={() => router.replace('/creator')} /> };
       return {
         initial: createEditorState({
           projectId: project.id,
@@ -132,10 +131,9 @@ function CreatorEditorView({ initial, seeded }: {
   seeded?: { label: string; titleCount: number };
 }) {
   const router = useRouter();
-  const session = useSessionStore((store) => store.session);
   const { width, height } = useWindowDimensions();
   const { state, actions, canAddSlide } = useCreatorEditor(initial);
-  const saveMutation = useSaveCreatorProject();
+  const saveMutation = useSaveCreatorDraft();
   const exporter = useSlideExporter(state.templateId, state.data);
   const [index, setIndex] = useState(0);
   const [tab, setTab] = useState<InspectorTab>('content');
@@ -145,6 +143,7 @@ function CreatorEditorView({ initial, seeded }: {
   const slides = state.data.slides;
   const safeIndex = Math.max(0, Math.min(index, slides.length - 1));
   const activeSlide = slides[safeIndex];
+  const activeLayoutId = slideLayoutOf(activeSlide, state.templateId);
 
   // Fixed slide proportions on every screen: page = full content width, the
   // canvas shrinks on short screens so the rail and inspector stay reachable.
@@ -184,21 +183,9 @@ function CreatorEditorView({ initial, seeded }: {
   }, [leave]);
 
   async function saveDraft() {
-    if (session.mode !== 'authenticated') {
-      const wantsSignIn = await showDialog({
-        type: 'info',
-        title: 'Sign in to save drafts',
-        message: 'You can keep creating and exporting as a guest. Signing in opens the account screen and closes this unsaved draft — export it first if you want to keep it.',
-        primaryAction: { label: 'Sign in' },
-        secondaryAction: { label: 'Not now' },
-      });
-      if (wantsSignIn) router.push('/(auth)/login');
-      return;
-    }
     try {
       const project = await saveMutation.mutateAsync({
         id: state.projectId,
-        userId: session.userId,
         name: state.name,
         templateId: state.templateId,
         format: state.format,
@@ -211,6 +198,14 @@ function CreatorEditorView({ initial, seeded }: {
     } catch (error) {
       void showFriendlyError(error, 'Couldn’t save your draft');
     }
+  }
+
+  function changeLayout(layout: CreatorTemplateId) {
+    if (layout === activeLayoutId) return;
+    const nextMax = creatorTemplate(layout).maxTitles;
+    const dropped = Math.max(0, activeSlide.titleRefs.length - nextMax);
+    actions.setSlideLayout(activeSlide.id, layout);
+    if (dropped > 0) showToast(`Layout switched — ${dropped} title${dropped === 1 ? '' : 's'} over the new ${nextMax}-title limit were removed`, 'info');
   }
 
   function confirmTitles(refs: CreatorTitleRef[]) {
@@ -267,8 +262,8 @@ function CreatorEditorView({ initial, seeded }: {
         />
         <View style={styles.inspector}>
           <SegmentedTabs options={INSPECTOR_TABS} value={tab} onChange={setTab} />
-          {tab === 'content' ? <ContentInspector slide={activeSlide} templateId={state.templateId} actions={actions} /> : null}
-          {tab === 'titles' ? <TitlesInspector slide={activeSlide} templateId={state.templateId} actions={actions} onAddTitles={() => setPickerOpen(true)} /> : null}
+          {tab === 'content' ? <ContentInspector slide={activeSlide} templateId={activeLayoutId} actions={actions} onChangeLayout={changeLayout} /> : null}
+          {tab === 'titles' ? <TitlesInspector slide={activeSlide} templateId={activeLayoutId} actions={actions} onAddTitles={() => setPickerOpen(true)} /> : null}
           {tab === 'style' ? <StyleInspector data={state.data} actions={actions} /> : null}
           {tab === 'caption' ? <CaptionInspector data={state.data} templateId={state.templateId} format={state.format} caption={state.caption} onChange={actions.setCaption} /> : null}
         </View>
@@ -277,11 +272,11 @@ function CreatorEditorView({ initial, seeded }: {
       <View style={styles.bottomBar}>
         <View style={styles.bottomButton}>
           <AppButton
-            label={session.mode === 'authenticated' ? 'Save draft' : 'Sign in to save'}
+            label="Save draft"
             variant="secondary"
             onPress={() => void saveDraft()}
             loading={saveMutation.isPending}
-            icon={<Ionicons name={session.mode === 'authenticated' ? 'cloud-upload-outline' : 'log-in-outline'} size={17} color={colors.textPrimary} />}
+            icon={<Ionicons name="save-outline" size={17} color={colors.textPrimary} />}
           />
         </View>
         <View style={styles.bottomButton}>
@@ -295,7 +290,7 @@ function CreatorEditorView({ initial, seeded }: {
 
       {pickerOpen ? (
         <TitlePickerModal
-          templateId={state.templateId}
+          templateId={activeLayoutId}
           format={state.format}
           existingKeys={activeSlide.titleRefs.map(creatorTitleKey)}
           onClose={() => setPickerOpen(false)}

@@ -64,14 +64,14 @@ export function creatorSeedTarget(seed: CreatorSeedId): CreatorSeedTarget {
       return { templateId: 'upcoming-releases', format: 'carousel' };
     case 'hits-month':
     case 'hits-year':
-      return { templateId: 'top10', format: 'carousel' };
+      return { templateId: 'stacked-ranking', format: 'carousel' };
   }
 }
 
 /** Bounds per seed so a draft opens instantly and stays editable by hand. */
 export const SEED_MAX_WATCHLIST = 18;
 export const SEED_MAX_UPCOMING = 20;
-export const SEED_MAX_HITS_PER_TYPE = 10;
+export const SEED_MAX_HITS_PER_TYPE = 5;
 export const SEED_MAX_TRENDING = 5;
 
 export interface CreatorSeedDraft extends CreatorSeedTarget {

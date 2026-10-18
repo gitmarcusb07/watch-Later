@@ -1,58 +1,56 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { creatorProjectsRepository, type SaveCreatorProjectInput } from '@/data/remote/supabase/creatorProjects';
-import { useSessionStore } from '@/store/app/sessionStore';
+import { creatorDraftRepository, type SaveCreatorDraftInput } from '@/data/local/repositories/SqliteCreatorDraftRepository';
 
 /**
- * Creator Studio data hooks. Everything is gated on an authenticated session
- * (drafts are account-scoped through RLS), so guests never trigger requests.
+ * Creator Studio draft hooks. Drafts are device-local SQLite rows — there is
+ * no account and no network involved, so every hook runs unconditionally and
+ * failures surface as "this device" messages from the repository.
  */
 
 export const creatorKeys = {
   all: ['creator'] as const,
-  projects: ['creator', 'projects'] as const,
-  project: (id: string) => ['creator', 'projects', id] as const,
+  drafts: ['creator', 'drafts'] as const,
+  draft: (id: string) => ['creator', 'drafts', id] as const,
 };
 
-export function useCreatorProjects(enabled = true) {
-  const session = useSessionStore((state) => state.session);
+export function useCreatorDrafts(enabled = true) {
   return useQuery({
-    queryKey: creatorKeys.projects,
-    queryFn: () => creatorProjectsRepository.list(),
-    enabled: enabled && session.mode === 'authenticated',
-    staleTime: 30_000,
+    queryKey: creatorKeys.drafts,
+    queryFn: () => creatorDraftRepository.list(),
+    enabled,
+    staleTime: 10_000,
     retry: 1,
   });
 }
 
-export function useCreatorProject(id: string | undefined) {
-  const session = useSessionStore((state) => state.session);
+export function useCreatorDraft(id: string | undefined) {
   return useQuery({
-    queryKey: id ? creatorKeys.project(id) : (['creator', 'projects', 'none'] as const),
-    queryFn: () => (id ? creatorProjectsRepository.get(id) : Promise.resolve(null)),
-    enabled: Boolean(id) && session.mode === 'authenticated',
-    staleTime: 15_000,
+    queryKey: id ? creatorKeys.draft(id) : (['creator', 'drafts', 'none'] as const),
+    queryFn: () => (id ? creatorDraftRepository.get(id) : Promise.resolve(null)),
+    enabled: Boolean(id),
+    staleTime: 10_000,
     retry: 1,
   });
 }
 
-export function useSaveCreatorProject() {
+export function useSaveCreatorDraft() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: SaveCreatorProjectInput) => creatorProjectsRepository.save(input),
+    mutationFn: (input: SaveCreatorDraftInput) => creatorDraftRepository.save(input),
     onSuccess: (project) => {
-      queryClient.setQueryData(creatorKeys.project(project.id), project);
-      void queryClient.invalidateQueries({ queryKey: creatorKeys.projects });
+      queryClient.setQueryData(creatorKeys.draft(project.id), project);
+      void queryClient.invalidateQueries({ queryKey: creatorKeys.drafts });
     },
   });
 }
 
-export function useDeleteCreatorProject() {
+export function useDeleteCreatorDraft() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => creatorProjectsRepository.remove(id),
+    mutationFn: (id: string) => creatorDraftRepository.remove(id),
     onSuccess: (_result, id) => {
-      queryClient.removeQueries({ queryKey: creatorKeys.project(id) });
-      void queryClient.invalidateQueries({ queryKey: creatorKeys.projects });
+      queryClient.removeQueries({ queryKey: creatorKeys.draft(id) });
+      void queryClient.invalidateQueries({ queryKey: creatorKeys.drafts });
     },
   });
 }

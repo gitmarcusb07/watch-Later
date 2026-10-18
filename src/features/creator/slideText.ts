@@ -43,6 +43,12 @@ export function formatSlideRating(value?: number): string | undefined {
   return `★ ${value.toFixed(1)}`;
 }
 
+/** Plain 0–10 score text ("8.4") for badge pills. Only real scores have one. */
+export function formatScore(value?: number): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+  return value.toFixed(1);
+}
+
 export function seasonsLabel(count?: number): string | undefined {
   if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) return undefined;
   return count === 1 ? '1 Season' : `${count} Seasons`;

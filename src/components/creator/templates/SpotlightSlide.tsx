@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
-import type { CreatorSlide } from '@/domain/models/creator';
+import type { CreatorBranding, CreatorSlide } from '@/domain/models/creator';
 import type { CreatorPalette } from '../palette';
 import { BrandMark, SlideChip, SlideKicker, SlidePoster, SlideText, joinMeta, slideTitleOf } from '../primitives';
 import { seasonsLabel, spotlightMeta, streamingProviders } from '@/features/creator/slideText';
@@ -10,11 +10,12 @@ import { seasonsLabel, spotlightMeta, streamingProviders } from '@/features/crea
  * a scrim carrying the editable copy; missing metadata simply drops its row,
  * and a missing poster falls back to the branded gradient tile.
  */
-export function SpotlightSlide({ variant, slide, palette, showBranding }: {
+export function SpotlightSlide({ variant, slide, palette, showBranding, branding }: {
   variant: 'movie' | 'series';
   slide: CreatorSlide;
   palette: CreatorPalette;
   showBranding: boolean;
+  branding: CreatorBranding;
 }) {
   const ref = slide.titleRefs[0];
   const title = slideTitleOf(ref, variant === 'movie' ? 'Your movie night pick' : 'Your next binge');
@@ -54,7 +55,7 @@ export function SpotlightSlide({ variant, slide, palette, showBranding }: {
             <SlideText style={[styles.closing, { color: palette.accent.primary }]} numberOfLines={1}>{slide.closing}</SlideText>
           </View>
         ) : null}
-        {showBranding ? <BrandMark palette={palette} style={styles.brand} /> : null}
+        {showBranding ? <BrandMark palette={palette} style={styles.brand} label={branding.name} /> : null}
       </View>
     </View>
   );

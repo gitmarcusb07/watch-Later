@@ -6,10 +6,13 @@ import { AppText } from '@/components/common/AppText';
 import { showToast } from '@/components/feedback/AppDialog';
 import { CREATOR_ACCENTS, creatorPalette } from '@/components/creator/palette';
 import { composeCaption, suggestCaptions, suggestHashtags } from '@/features/creator/captions';
-import { creatorTemplate, templateHighlightsDates, templateRanksTitles } from '@/features/creator/templates';
+import { CREATOR_TEMPLATES, creatorTemplate, templateHighlightsDates, templateRanksTitles, type CreatorTemplateMeta } from '@/features/creator/templates';
 import { rowMeta } from '@/features/creator/slideText';
 import type { CreatorEditorActions } from '@/features/creator/useCreatorEditor';
 import {
+  CREATOR_MAX_BRAND_HANDLE,
+  CREATOR_MAX_BRAND_NAME,
+  CREATOR_MAX_BRAND_TAGLINE,
   CREATOR_MAX_CLOSING,
   CREATOR_MAX_DESCRIPTION,
   CREATOR_MAX_HEADLINE,
@@ -34,16 +37,47 @@ const SUBTITLE_LIMIT = CREATOR_MAX_SUBTITLE;
 const DESCRIPTION_LIMIT = CREATOR_MAX_DESCRIPTION;
 const CLOSING_LIMIT = CREATOR_MAX_CLOSING;
 
-export function ContentInspector({ slide, templateId, actions }: {
+/** Layout choices in carousel order: open, carry the picks, close. */
+const LAYOUT_GROUPS: { label: string; kind: CreatorTemplateMeta['kind'] }[] = [
+  { label: 'Cover', kind: 'cover' },
+  { label: 'Content', kind: 'content' },
+  { label: 'Promo', kind: 'promo' },
+];
+
+export function ContentInspector({ slide, templateId, actions, onChangeLayout }: {
   slide: CreatorSlide;
   templateId: CreatorTemplateId;
   actions: CreatorEditorActions;
+  onChangeLayout: (layout: CreatorTemplateId) => void;
 }) {
   // Only the spotlight renderers draw `description`; hide the field elsewhere
   // rather than offering an edit that would never appear on the slide.
   const showsDescription = templateId === 'movie-spotlight' || templateId === 'series-spotlight';
   return (
     <>
+      <InspectorSection title="Layout for this slide">
+        {LAYOUT_GROUPS.map((group) => {
+          const templates = CREATOR_TEMPLATES.filter((template) => template.kind === group.kind);
+          if (!templates.length) return null;
+          return (
+            <View key={group.kind} style={styles.layoutGroup}>
+              <AppText variant="caption" muted style={styles.layoutGroupLabel}>{group.label.toUpperCase()}</AppText>
+              <View style={styles.chipRow}>
+                {templates.map((template) => (
+                  <ToggleChip
+                    key={template.id}
+                    label={template.name}
+                    icon={template.icon as keyof typeof Ionicons.glyphMap}
+                    active={templateId === template.id}
+                    onPress={() => onChangeLayout(template.id)}
+                  />
+                ))}
+              </View>
+            </View>
+          );
+        })}
+        <AppText variant="caption" muted>Each slide can use a different layout — open with a cover, stack the picks, close with a follow card.</AppText>
+      </InspectorSection>
       <InspectorSection title="Text on this slide">
         <EditorField label="Kicker" value={slide.headline} onChangeText={(value) => actions.setSlideText(slide.id, 'headline', value)} maxLength={HEADLINE_LIMIT} placeholder="NOW SHOWING" />
         <EditorField label="Subtitle" value={slide.subtitle} onChangeText={(value) => actions.setSlideText(slide.id, 'subtitle', value)} maxLength={SUBTITLE_LIMIT} placeholder="Movie night pick" />
@@ -139,9 +173,12 @@ export function StyleInspector({ data, actions }: {
       </InspectorSection>
       <InspectorSection title="Branding">
         <View style={styles.chipRow}>
-          <ToggleChip label="Show Watch Later mark" icon="sparkles-outline" active={data.showBranding} onPress={() => actions.setBranding(!data.showBranding)} />
+          <ToggleChip label="Show brand" icon="sparkles-outline" active={data.showBranding} onPress={() => actions.setBranding(!data.showBranding)} />
         </View>
-        <AppText variant="caption" muted>A small wordmark in the slide corner. Turning it off keeps the export clean.</AppText>
+        <EditorField label="Page name" value={data.branding.name} onChangeText={(value) => actions.setBrandingField('name', value)} maxLength={CREATOR_MAX_BRAND_NAME} placeholder="Watch Later" />
+        <EditorField label="Handle" value={data.branding.handle} onChangeText={(value) => actions.setBrandingField('handle', value)} maxLength={CREATOR_MAX_BRAND_HANDLE} placeholder="watchlater" />
+        <EditorField label="Tagline" value={data.branding.tagline} onChangeText={(value) => actions.setBrandingField('tagline', value)} maxLength={CREATOR_MAX_BRAND_TAGLINE} placeholder="Daily movie & show picks" />
+        <AppText variant="caption" muted>Your name and handle ride along on every slide’s wordmark, and fill the profile card on Cover and Follow slides. Turning “Show brand” off keeps the export clean.</AppText>
       </InspectorSection>
     </>
   );
@@ -241,6 +278,8 @@ function RowAction({ icon, label, disabled = false, danger = false, onPress }: {
 
 const styles = StyleSheet.create({
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  layoutGroup: { gap: spacing.xs, marginBottom: spacing.xs },
+  layoutGroupLabel: { letterSpacing: 1 },
   titleList: { gap: spacing.xs },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   titleIndex: { width: 22, alignItems: 'center' },

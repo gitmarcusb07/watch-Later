@@ -10,46 +10,43 @@ import { showDialog, showToast } from '@/components/feedback/AppDialog';
 import { LoadingView } from '@/components/feedback/FeedbackViews';
 import { CREATOR_TEMPLATES } from '@/features/creator/templates';
 import { CREATOR_SEEDS } from '@/features/creator/useCreatorSeed';
-import { useCreatorProjects, useDeleteCreatorProject } from '@/features/creator/hooks';
+import { useCreatorDrafts, useDeleteCreatorDraft } from '@/features/creator/hooks';
 import { EXPORT_HEIGHT, EXPORT_WIDTH } from '@/features/creator/exportPlan';
 import type { CreatorProjectSummary } from '@/domain/models/creator';
 import { timeAgo } from '@/lib/relativeTime';
 import { showFriendlyError } from '@/lib/friendlyError';
 import { triggerLightHaptic } from '@/lib/haptics';
-import { useSessionStore } from '@/store/app/sessionStore';
 import { colors, radius, spacing } from '@/theme';
 
 /**
  * Creator Studio home: every way into the editor (seeds from the user's own
- * data, the seven templates, saved drafts) plus the guest path — guests get
- * the full create/export flow and a single, honest sign-in prompt for drafts.
+ * data, the templates, saved drafts). Drafts live on this device — there is
+ * no account anywhere in the studio, and nothing is ever uploaded.
  */
 export default function CreatorStudioScreen() {
   const router = useRouter();
-  const session = useSessionStore((store) => store.session);
-  const authenticated = session.mode === 'authenticated';
-  const projects = useCreatorProjects();
-  const deleteProject = useDeleteCreatorProject();
+  const draftsQuery = useCreatorDrafts();
+  const deleteDraft = useDeleteCreatorDraft();
 
   async function confirmDelete(project: CreatorProjectSummary) {
     const confirmed = await showDialog({
       type: 'warning',
       title: 'Delete this draft?',
-      message: `“${project.name}” will be removed from your account. Exported images you already saved stay in your gallery.`,
+      message: `“${project.name}” will be removed from this device. Exported images you already saved stay in your gallery.`,
       primaryAction: { label: 'Delete', destructive: true },
       secondaryAction: { label: 'Cancel' },
     });
     if (!confirmed) return;
-    deleteProject.mutate(project.id, {
+    deleteDraft.mutate(project.id, {
       onSuccess: () => showToast('Draft deleted', 'info'),
       onError: (error) => void showFriendlyError(error, 'Couldn’t delete that draft'),
     });
   }
 
-  const drafts = projects.data ?? [];
+  const drafts = draftsQuery.data ?? [];
 
   return (
-    <Screen scroll refreshControl={authenticated ? <RefreshControl refreshing={projects.isRefetching && !projects.isLoading} onRefresh={() => void projects.refetch()} tintColor={colors.accent} colors={[colors.accent]} /> : undefined}>
+    <Screen scroll refreshControl={<RefreshControl refreshing={draftsQuery.isRefetching && !draftsQuery.isLoading} onRefresh={() => void draftsQuery.refetch()} tintColor={colors.accent} colors={[colors.accent]} />}>
       <FadeInView>
         <View style={styles.top}>
           <IconButton name="arrow-back" label="Go back" onPress={() => router.back()} />
@@ -60,19 +57,6 @@ export default function CreatorStudioScreen() {
           </View>
         </View>
       </FadeInView>
-
-      {!authenticated ? (
-        <FadeInView delay={60}>
-          <View style={styles.guestCard}>
-            <View style={styles.guestIcon}><Ionicons name="color-wand-outline" size={22} color={colors.accent} /></View>
-            <View style={styles.guestCopy}>
-              <AppText variant="bodyMedium">Create and export for free</AppText>
-              <AppText variant="caption" muted>Export straight to your gallery or share sheet. Sign in to save drafts to your account and open them on any device.</AppText>
-            </View>
-            <AppButton label="Sign in to save drafts" variant="secondary" onPress={() => router.push('/(auth)/login')} icon={<Ionicons name="log-in-outline" size={17} color={colors.textPrimary} />} />
-          </View>
-        </FadeInView>
-      ) : null}
 
       <FadeInView delay={120}>
         <View style={styles.section}>
@@ -122,22 +106,15 @@ export default function CreatorStudioScreen() {
 
       <FadeInView delay={240}>
         <View style={styles.section}>
-          <AppText variant="caption" muted style={styles.sectionTitle}>{authenticated ? `YOUR DRAFTS (${drafts.length})` : 'YOUR DRAFTS'}</AppText>
-          {!authenticated ? (
-            <View style={styles.card}>
-              <View style={styles.emptyDrafts}>
-                <Ionicons name="cloud-outline" size={22} color={colors.textMuted} />
-                <AppText variant="bodySmall" muted style={styles.emptyDraftsText}>Sign in and your drafts show up here — ready to edit and export any time.</AppText>
-              </View>
-            </View>
-          ) : projects.isLoading ? (
+          <AppText variant="caption" muted style={styles.sectionTitle}>YOUR DRAFTS{drafts.length ? ` (${drafts.length})` : ''}</AppText>
+          {draftsQuery.isLoading ? (
             <LoadingView label="Loading your drafts" />
-          ) : projects.isError ? (
+          ) : draftsQuery.isError ? (
             <View style={styles.card}>
               <View style={styles.emptyDrafts}>
-                <Ionicons name="cloud-offline-outline" size={22} color={colors.textMuted} />
-                <AppText variant="bodySmall" muted style={styles.emptyDraftsText}>Couldn’t load your drafts right now.</AppText>
-                <AppButton label="Try again" variant="secondary" onPress={() => void projects.refetch()} />
+                <Ionicons name="save-outline" size={22} color={colors.textMuted} />
+                <AppText variant="bodySmall" muted style={styles.emptyDraftsText}>Couldn’t open your drafts on this device right now.</AppText>
+                <AppButton label="Try again" variant="secondary" onPress={() => void draftsQuery.refetch()} />
               </View>
             </View>
           ) : drafts.length ? (
@@ -171,7 +148,7 @@ export default function CreatorStudioScreen() {
       </FadeInView>
 
       <FadeInView delay={300}>
-        <AppText variant="caption" muted style={styles.footer}>Rendered on this device · nothing is uploaded</AppText>
+        <AppText variant="caption" muted style={styles.footer}>Rendered on this device · drafts stay on this device · nothing is uploaded</AppText>
       </FadeInView>
     </Screen>
   );
@@ -185,9 +162,6 @@ const styles = StyleSheet.create({
   top: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, paddingTop: spacing.lg, paddingBottom: spacing.md },
   titleWrap: { flex: 1, gap: spacing.xs },
   eyebrow: { color: colors.accent, letterSpacing: 2 },
-  guestCard: { gap: spacing.md, borderRadius: radius.large, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.lg, marginBottom: spacing.xl },
-  guestIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(168,85,247,0.12)', alignItems: 'center', justifyContent: 'center' },
-  guestCopy: { gap: spacing.xs },
   section: { marginBottom: spacing.xl },
   sectionTitle: { letterSpacing: 1, marginBottom: spacing.sm, marginLeft: spacing.xs },
   card: { backgroundColor: colors.surface, borderRadius: radius.medium, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },

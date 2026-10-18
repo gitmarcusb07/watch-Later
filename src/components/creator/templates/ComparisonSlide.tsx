@@ -1,11 +1,11 @@
 import { StyleSheet, View } from 'react-native';
-import type { CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
+import type { CreatorBranding, CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
 import type { CreatorPalette } from '../palette';
 import { BrandMark, SlidePoster, SlideText, slideTitleOf } from '../primitives';
 import { rowMeta } from '@/features/creator/slideText';
 
 /** Head-to-head: two posters, one "VS" marker, editable closer. */
-export function ComparisonSlide({ slide, palette, showBranding }: { slide: CreatorSlide; palette: CreatorPalette; showBranding: boolean }) {
+export function ComparisonSlide({ slide, palette, showBranding, branding }: { slide: CreatorSlide; palette: CreatorPalette; showBranding: boolean; branding: CreatorBranding }) {
   const [left, right] = slide.titleRefs;
   return (
     <View style={styles.root}>
@@ -22,7 +22,7 @@ export function ComparisonSlide({ slide, palette, showBranding }: { slide: Creat
       </View>
       <View style={styles.footer}>
         {slide.closing ? <SlideText style={[styles.closing, { color: palette.accent.primary }]} numberOfLines={2}>{slide.closing}</SlideText> : null}
-        {showBranding ? <BrandMark palette={palette} /> : null}
+        {showBranding ? <BrandMark palette={palette} label={branding.name} /> : null}
       </View>
     </View>
   );

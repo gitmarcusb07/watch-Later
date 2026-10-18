@@ -55,6 +55,7 @@ export function PreviewPager({ templateId, data, index, onChangeIndex, pageWidth
                 theme={data.theme}
                 accentId={data.accentId}
                 showBranding={data.showBranding}
+                branding={data.branding}
                 slide={slide}
                 width={width}
                 radius={radius.large}

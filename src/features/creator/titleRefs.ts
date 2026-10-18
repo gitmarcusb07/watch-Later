@@ -8,7 +8,7 @@ import {
   type CreatorTitleRef,
 } from '@/domain/models/creator';
 import type { HitReportItem } from '@/features/hits/types';
-import { creatorTemplate, templateRanksTitles } from './templates';
+import { creatorTemplate, slideLayoutOf, templateRanksTitles } from './templates';
 import { formatMaxSlides } from './validation';
 
 /**
@@ -37,6 +37,7 @@ export function titleRefFromMedia(media: CatalogMedia): CreatorTitleRef {
     year: media.year ?? (media.releaseDate ? Number(media.releaseDate.slice(0, 4)) || undefined : undefined),
     releaseDate: media.releaseDate,
     posterUrl: media.posterUrl,
+    backdropUrl: media.backdropUrl,
     rating: typeof media.rating === 'number' && Number.isFinite(media.rating) ? media.rating : undefined,
     language: trimText(media.language, 40),
     overview: trimText(media.overview, 600),
@@ -78,6 +79,7 @@ export function createSlideForTemplate(templateId: CreatorTemplateId, id: string
   const template = creatorTemplate(templateId);
   return {
     id,
+    layout: templateId,
     titleRefs: [],
     headline: template.defaultHeadline,
     subtitle: template.defaultSubtitle,
@@ -99,9 +101,9 @@ export interface AddTitleRefsResult {
 
 /**
  * Adds snapshots to a project's slides, starting at `targetIndex`: fills the
- * target slide up to the template's cap, then appends new slides (carousel
- * only) with the template kicker. Refs already on a slide are skipped so the
- * same title never renders twice on one slide.
+ * target slide up to its layout's cap, then appends new slides (carousel
+ * only) with the project template's kicker. Refs already on a slide are
+ * skipped so the same title never renders twice on one slide.
  */
 export function addTitleRefsToSlides(
   slides: CreatorSlide[],
@@ -110,7 +112,6 @@ export function addTitleRefsToSlides(
   refs: CreatorTitleRef[],
   targetIndex = 0,
 ): AddTitleRefsResult {
-  const { maxTitles } = creatorTemplate(templateId);
   const maxSlides = formatMaxSlides(format);
   const next = slides.map((slide) => ({ ...slide, titleRefs: [...slide.titleRefs] }));
   if (!next.length) next.push(createSlideForTemplate(templateId));
@@ -128,6 +129,7 @@ export function addTitleRefsToSlides(
         next.push(createSlideForTemplate(templateId));
       }
       const slide = next[index];
+      const maxTitles = creatorTemplate(slideLayoutOf(slide, templateId)).maxTitles;
       if (slide.titleRefs.length >= maxTitles) continue;
       if (slide.titleRefs.some((existing) => creatorTitleKey(existing) === key)) { placed = true; break; }
       slide.titleRefs.push(ref);

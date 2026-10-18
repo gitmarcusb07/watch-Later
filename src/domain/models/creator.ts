@@ -3,15 +3,19 @@ import type { CatalogMediaType, MediaIdentity, MediaProvider } from './media';
 /**
  * Creator Studio domain: Instagram-ready posts and carousels built from the
  * app's own catalog metadata. Projects are validated plain data (stored as
- * versioned JSON in Supabase) so drafts never depend on a live catalog fetch
- * and a malformed column can never crash the editor.
+ * versioned JSON on-device) so drafts never depend on a live catalog fetch
+ * and a malformed row can never crash the editor.
  */
 
 export const CREATOR_TEMPLATE_IDS = [
+  'collage-cover',
+  'stacked-ranking',
+  'page-promo',
   'movie-spotlight',
   'series-spotlight',
   'top5',
-  'top10',
+  'stacked-ranking',
+  'page-promo',
   'movie-comparison',
   'watchlist-collection',
   'upcoming-releases',
@@ -32,10 +36,10 @@ export const CREATOR_ACCENT_IDS = ['lavender', 'coral', 'gold', 'mint', 'sky', '
 export type CreatorAccentId = (typeof CREATOR_ACCENT_IDS)[number];
 
 /** Bumped only when the persisted `slide_data` shape changes incompatibly. */
-export const CREATOR_DATA_VERSION = 1 as const;
+export const CREATOR_DATA_VERSION = 2 as const;
 
 export const CREATOR_MAX_SLIDES = 10;
-export const CREATOR_MAX_TITLES_PER_SLIDE = 10;
+export const CREATOR_MAX_TITLES_PER_SLIDE = 5;
 export const CREATOR_MAX_HEADLINE = 60;
 export const CREATOR_MAX_SUBTITLE = 90;
 export const CREATOR_MAX_DESCRIPTION = 220;
@@ -43,6 +47,25 @@ export const CREATOR_MAX_CLOSING = 80;
 export const CREATOR_MAX_CAPTION = 2000;
 export const CREATOR_MAX_NAME = 60;
 export const CREATOR_MAX_TITLE_REFS = 60;
+export const CREATOR_MAX_BRAND_NAME = 30;
+export const CREATOR_MAX_BRAND_HANDLE = 40;
+export const CREATOR_MAX_BRAND_TAGLINE = 90;
+
+/** Page identity rendered on cover/promo slides. Defaults to the app's own. */
+export interface CreatorBranding {
+  /** Page / channel name, e.g. "Watch Later". */
+  name: string;
+  /** Social handle without decoration, e.g. "watchlater". May be empty. */
+  handle: string;
+  /** One-line bio/tagline. May be empty. */
+  tagline: string;
+}
+
+export const CREATOR_DEFAULT_BRANDING: CreatorBranding = {
+  name: 'Watch Later',
+  handle: '',
+  tagline: '',
+};
 
 /**
  * A bounded snapshot of one catalog title, captured at selection time. Missing
@@ -57,8 +80,12 @@ export interface CreatorTitleRef {
   /** `YYYY-MM-DD` (or year-only) release date, as the provider reported it. */
   releaseDate?: string;
   posterUrl?: string;
+  /** Wide artwork when the provider offered one; rows prefer it over the poster. */
+  backdropUrl?: string;
   /** Provider rating on its native scale (TMDb 0–10). Never derived. */
   rating?: number;
+  /** IMDb rating (0–10) when a real, matched IMDb snapshot exists. Never derived. */
+  imdbRating?: number;
   language?: string;
   overview?: string;
   /** Season count reported by the provider (series/anime). Never estimated. */
@@ -71,9 +98,14 @@ export interface CreatorTitleRef {
   providers?: string[];
 }
 
-/** One editable slide. `titleRefs` length is bounded by the template. */
+/** One editable slide. `titleRefs` length is bounded by the slide's layout. */
 export interface CreatorSlide {
   id: string;
+  /**
+   * Per-slide template override. Absent slides fall back to the project's
+   * template, so mixed carousels (cover → lists → promo) stay possible.
+   */
+  layout?: CreatorTemplateId;
   titleRefs: CreatorTitleRef[];
   /** Eyebrow/kicker above the main heading (e.g. "NOW SHOWING"). */
   headline: string;
@@ -86,18 +118,20 @@ export interface CreatorSlide {
   showProviders: boolean;
 }
 
-/** The validated JSON payload stored in `creator_projects.slide_data`. */
+/** The validated JSON payload stored with a draft. */
 export interface CreatorProjectData {
   version: typeof CREATOR_DATA_VERSION;
   theme: CreatorTheme;
   accentId: CreatorAccentId;
   showBranding: boolean;
+  branding: CreatorBranding;
   slides: CreatorSlide[];
 }
 
 export interface CreatorProject {
   id: string;
-  userId: string;
+  /** No longer set: drafts are device-local and ownerless. */
+  userId?: string;
   name: string;
   templateId: CreatorTemplateId;
   format: CreatorFormat;

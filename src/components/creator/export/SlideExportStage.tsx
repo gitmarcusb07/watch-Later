@@ -94,6 +94,7 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
               theme={data.theme}
               accentId={data.accentId}
               showBranding={data.showBranding}
+              branding={data.branding}
               slide={slide}
             />
           </View>
@@ -112,6 +113,7 @@ function collectPosterUrls(data: CreatorProjectData, plan: ExportSlidePlan[]): s
     if (!wanted.has(slide.id)) continue;
     for (const ref of slide.titleRefs) {
       if (ref.posterUrl) urls.add(ref.posterUrl);
+      if (ref.backdropUrl) urls.add(ref.backdropUrl);
     }
   }
   return [...urls];

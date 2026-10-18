@@ -1,16 +1,16 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
-import type { CreatorSlide } from '@/domain/models/creator';
+import type { CreatorBranding, CreatorSlide } from '@/domain/models/creator';
 import type { CreatorPalette } from '../palette';
 import { BrandMark, SlidePoster, SlideText } from '../primitives';
 
 /**
- * Watchlist-style collection: a 3 x 2 poster mosaic with titles burned into
- * each tile. Six tiles keep every poster readable on the 4:5 canvas; longer
+ * Watchlist-style collection: a 3 + 2 poster mosaic with titles burned into
+ * each tile. Five tiles keep every poster readable on the 4:5 canvas; longer
  * collections continue on the next slide (distribution handles the split).
  */
-export function CollectionGridSlide({ slide, palette, showBranding }: { slide: CreatorSlide; palette: CreatorPalette; showBranding: boolean }) {
-  const refs = slide.titleRefs.slice(0, 6);
+export function CollectionGridSlide({ slide, palette, showBranding, branding }: { slide: CreatorSlide; palette: CreatorPalette; showBranding: boolean; branding: CreatorBranding }) {
+  const refs = slide.titleRefs.slice(0, 5);
   const subtitle = slide.subtitle.trim() || (refs.length ? `${refs.length} ${refs.length === 1 ? 'title' : 'titles'} saved` : '');
   return (
     <View style={styles.root}>
@@ -44,7 +44,7 @@ export function CollectionGridSlide({ slide, palette, showBranding }: { slide: C
       )}
       <View style={styles.footer}>
         {slide.closing ? <SlideText style={[styles.closing, { color: palette.accent.primary }]} numberOfLines={1}>{slide.closing}</SlideText> : null}
-        {showBranding ? <BrandMark palette={palette} /> : null}
+        {showBranding ? <BrandMark palette={palette} label={branding.name} /> : null}
       </View>
     </View>
   );

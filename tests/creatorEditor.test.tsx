@@ -3,6 +3,7 @@ import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
 import {
   CREATOR_TEMPLATE_IDS,
   type CreatorAccentId,
+  type CreatorBranding,
   type CreatorSlide,
   type CreatorTemplateId,
   type CreatorTitleRef,
@@ -20,7 +21,7 @@ function ref(overrides: Partial<CreatorTitleRef> & { title: string }): CreatorTi
 function renderCanvas(
   templateId: CreatorTemplateId,
   slide: CreatorSlide,
-  options: { theme?: 'dark' | 'light'; accentId?: CreatorAccentId; width?: number } = {},
+  options: { theme?: 'dark' | 'light'; accentId?: CreatorAccentId; width?: number; branding?: CreatorBranding } = {},
 ): ReactTestRenderer {
   let tree!: ReactTestRenderer;
   act(() => {
@@ -30,6 +31,7 @@ function renderCanvas(
         theme={options.theme ?? 'dark'}
         accentId={options.accentId ?? 'lavender'}
         showBranding
+        branding={options.branding}
         slide={slide}
         width={options.width ?? 180}
       />,
@@ -48,7 +50,7 @@ describe('creator slide canvases', () => {
     const tree = renderCanvas(templateId, slide);
     const text = textOf(tree);
     expect(text).toContain(slide.headline);
-    expect(text).toContain('WATCH LATER');
+    expect(text.toLowerCase()).toContain('watch later');
     act(() => tree.unmount());
   });
 
@@ -126,7 +128,7 @@ describe('creator slide canvases', () => {
     expect(undatedText).toContain('TBA');
   });
 
-  it('ranks five with padded badges and ten across two columns', () => {
+  it('ranks five with padded badges', () => {
     const five: CreatorSlide = {
       ...createSlideForTemplate('top5'),
       titleRefs: Array.from({ length: 5 }, (_, index) => ref({ title: `Pick ${index + 1}`, providerId: String(index + 1) })),
@@ -134,14 +136,53 @@ describe('creator slide canvases', () => {
     const fiveText = textOf(renderCanvas('top5', five));
     expect(fiveText).toContain('05');
     expect(fiveText).toContain('Pick 5');
+  });
 
-    const ten: CreatorSlide = {
-      ...createSlideForTemplate('top10'),
-      titleRefs: Array.from({ length: 10 }, (_, index) => ref({ title: `Pick ${index + 1}`, providerId: String(index + 1) })),
+  it('stacks rows with year chips and honest IMDb/TMDb badges', () => {
+    const slide: CreatorSlide = {
+      ...createSlideForTemplate('stacked-ranking'),
+      subtitle: '2017',
+      titleRefs: [
+        ref({ title: 'Badged', year: 2017, imdbRating: 8.4, rating: 7.1, backdropUrl: 'https://example.test/b.jpg' }),
+        ref({ title: 'ProviderOnly', providerId: '2', year: 2016, rating: 7.9 }),
+      ],
     };
-    const tenText = textOf(renderCanvas('top10', ten));
-    expect(tenText).toContain('10');
-    expect(tenText).toContain('Pick 10');
+    const text = textOf(renderCanvas('stacked-ranking', slide));
+    expect(text).toContain('Badged');
+    expect(text).toContain('IMDb 8.4');
+    expect(text).toContain('2017');
+    expect(text).toContain('ProviderOnly');
+    expect(text).toContain('★ 7.9');
+    // The subtitle renders as the big display line above the stack.
+    expect(text).toContain('2017');
+  });
+
+  it('shows the collage cover with its swipe cue and the follow card with its handle', () => {
+    const cover: CreatorSlide = {
+      ...createSlideForTemplate('collage-cover'),
+      titleRefs: [ref({ title: 'Cover One' }), ref({ title: 'Cover Two', providerId: '2' })],
+    };
+    const coverText = textOf(renderCanvas('collage-cover', cover));
+    expect(coverText).toContain('MOST ICONIC PICKS');
+    expect(coverText).toContain('SWIPE FOR THE FULL LIST →');
+
+    const promo: CreatorSlide = {
+      ...createSlideForTemplate('page-promo'),
+      titleRefs: [ref({ title: 'Backdrop Title', backdropUrl: 'https://example.test/b.jpg' })],
+    };
+    const promoText = textOf(renderCanvas('page-promo', promo, { branding: { name: 'Cine Club', handle: '@cineclub', tagline: 'Nightly picks' } }));
+    expect(promoText).toContain('Cine Club');
+    expect(promoText).toContain('@cineclub');
+    expect(promoText).toContain('Nightly picks');
+    expect(promoText).toContain('FOLLOW FOR DAILY PICKS');
+  });
+
+  it('dispatches per slide layout over the project template', () => {
+    const override: CreatorSlide = { ...createSlideForTemplate('movie-spotlight'), layout: 'collage-cover', closing: 'Swipe for the full list →' };
+    const text = textOf(renderCanvas('movie-spotlight', override));
+    // The collage's empty-poster coach is unique to that layout.
+    expect(text).toContain('Add up to 5 posters to build the collage');
+    expect(text).toContain('SWIPE FOR THE FULL LIST →');
   });
 
   it('renders the light variant with a different surface than the dark one', () => {

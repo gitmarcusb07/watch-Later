@@ -1,6 +1,10 @@
 import { useMemo, useReducer } from 'react';
 import {
   CREATOR_DATA_VERSION,
+  CREATOR_DEFAULT_BRANDING,
+  CREATOR_MAX_BRAND_HANDLE,
+  CREATOR_MAX_BRAND_NAME,
+  CREATOR_MAX_BRAND_TAGLINE,
   CREATOR_MAX_CLOSING,
   CREATOR_MAX_DESCRIPTION,
   CREATOR_MAX_HEADLINE,
@@ -38,6 +42,7 @@ export interface CreatorEditorState {
 
 export type CreatorSlideFlag = 'showRating' | 'showReleaseDate' | 'showGenres' | 'showProviders';
 export type CreatorSlideTextKey = 'headline' | 'subtitle' | 'description' | 'closing';
+export type CreatorBrandingKey = 'name' | 'handle' | 'tagline';
 
 export type CreatorEditorAction =
   | { type: 'rename'; name: string }
@@ -45,7 +50,9 @@ export type CreatorEditorAction =
   | { type: 'setTheme'; theme: CreatorTheme }
   | { type: 'setAccent'; accentId: CreatorAccentId }
   | { type: 'setBranding'; showBranding: boolean }
+  | { type: 'setBrandingField'; key: CreatorBrandingKey; value: string }
   | { type: 'setSlideText'; slideId: string; key: CreatorSlideTextKey; value: string }
+  | { type: 'setSlideLayout'; slideId: string; layout: CreatorTemplateId }
   | { type: 'toggleSlideFlag'; slideId: string; flag: CreatorSlideFlag }
   | { type: 'addTitles'; slideId: string; refs: CreatorTitleRef[] }
   | { type: 'removeTitle'; slideId: string; index: number }
@@ -61,6 +68,12 @@ const TEXT_LIMITS: Record<CreatorSlideTextKey, number> = {
   subtitle: CREATOR_MAX_SUBTITLE,
   description: CREATOR_MAX_DESCRIPTION,
   closing: CREATOR_MAX_CLOSING,
+};
+
+const BRANDING_LIMITS: Record<CreatorBrandingKey, number> = {
+  name: CREATOR_MAX_BRAND_NAME,
+  handle: CREATOR_MAX_BRAND_HANDLE,
+  tagline: CREATOR_MAX_BRAND_TAGLINE,
 };
 
 function mapSlide(state: CreatorEditorState, slideId: string, transform: (slide: CreatorSlide) => CreatorSlide): CreatorEditorState {
@@ -89,8 +102,24 @@ export function creatorEditorReducer(state: CreatorEditorState, action: CreatorE
       return { ...state, data: { ...state.data, accentId: action.accentId }, dirty: true };
     case 'setBranding':
       return { ...state, data: { ...state.data, showBranding: action.showBranding }, dirty: true };
+    case 'setBrandingField':
+      return {
+        ...state,
+        data: {
+          ...state.data,
+          branding: { ...state.data.branding, [action.key]: clampCreatorText(action.value, BRANDING_LIMITS[action.key]) },
+        },
+        dirty: true,
+      };
     case 'setSlideText':
       return mapSlide(state, action.slideId, (slide) => ({ ...slide, [action.key]: clampCreatorText(action.value, TEXT_LIMITS[action.key]) }));
+    case 'setSlideLayout':
+      return mapSlide(state, action.slideId, (slide) => ({
+        ...slide,
+        layout: action.layout,
+        // A layout with a smaller cap keeps the first refs and drops the rest.
+        titleRefs: slide.titleRefs.slice(0, creatorTemplate(action.layout).maxTitles),
+      }));
     case 'toggleSlideFlag':
       return mapSlide(state, action.slideId, (slide) => ({ ...slide, [action.flag]: !slide[action.flag] }));
     case 'addTitles': {
@@ -154,6 +183,7 @@ export function createEditorState(initial: CreatorEditorInitial): CreatorEditorS
     theme: 'dark',
     accentId: 'lavender',
     showBranding: true,
+    branding: { ...CREATOR_DEFAULT_BRANDING },
     slides: initial.slides?.length ? initial.slides : [createSlideForTemplate(initial.templateId)],
   };
   return {
@@ -162,7 +192,11 @@ export function createEditorState(initial: CreatorEditorInitial): CreatorEditorS
     templateId: initial.templateId,
     format: initial.format,
     caption: initial.caption ?? '',
-    data: { ...data, slides: data.slides.slice(0, formatMaxSlides(initial.format)) },
+    data: {
+      ...data,
+      branding: data.branding ?? { ...CREATOR_DEFAULT_BRANDING },
+      slides: data.slides.slice(0, formatMaxSlides(initial.format)),
+    },
     dirty: false,
   };
 }
@@ -180,7 +214,9 @@ export interface CreatorEditorActions {
   setTheme: (theme: CreatorTheme) => void;
   setAccent: (accentId: CreatorAccentId) => void;
   setBranding: (showBranding: boolean) => void;
+  setBrandingField: (key: CreatorBrandingKey, value: string) => void;
   setSlideText: (slideId: string, key: CreatorSlideTextKey, value: string) => void;
+  setSlideLayout: (slideId: string, layout: CreatorTemplateId) => void;
   toggleSlideFlag: (slideId: string, flag: CreatorSlideFlag) => void;
   addTitles: (slideId: string, refs: CreatorTitleRef[]) => void;
   removeTitle: (slideId: string, index: number) => void;
@@ -200,7 +236,9 @@ export function useCreatorEditor(initial: CreatorEditorState) {
     setTheme: (theme: CreatorTheme) => dispatch({ type: 'setTheme', theme }),
     setAccent: (accentId: CreatorAccentId) => dispatch({ type: 'setAccent', accentId }),
     setBranding: (showBranding: boolean) => dispatch({ type: 'setBranding', showBranding }),
+    setBrandingField: (key: CreatorBrandingKey, value: string) => dispatch({ type: 'setBrandingField', key, value }),
     setSlideText: (slideId: string, key: CreatorSlideTextKey, value: string) => dispatch({ type: 'setSlideText', slideId, key, value }),
+    setSlideLayout: (slideId: string, layout: CreatorTemplateId) => dispatch({ type: 'setSlideLayout', slideId, layout }),
     toggleSlideFlag: (slideId: string, flag: CreatorSlideFlag) => dispatch({ type: 'toggleSlideFlag', slideId, flag }),
     addTitles: (slideId: string, refs: CreatorTitleRef[]) => dispatch({ type: 'addTitles', slideId, refs }),
     removeTitle: (slideId: string, index: number) => dispatch({ type: 'removeTitle', slideId, index }),

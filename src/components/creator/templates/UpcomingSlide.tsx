@@ -1,5 +1,5 @@
 import { StyleSheet, View } from 'react-native';
-import type { CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
+import type { CreatorBranding, CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
 import type { CreatorPalette } from '../palette';
 import { BrandMark, SlidePoster, SlideText, joinMeta } from '../primitives';
 import { mediaTypeLabel, rowMeta, splitSlideDate } from '@/features/creator/slideText';
@@ -8,7 +8,7 @@ import { mediaTypeLabel, rowMeta, splitSlideDate } from '@/features/creator/slid
  * Dated upcoming releases. Every date comes from the provider snapshot; a
  * missing date reads "TBA" — the template never guesses a window.
  */
-export function UpcomingSlide({ slide, palette, showBranding }: { slide: CreatorSlide; palette: CreatorPalette; showBranding: boolean }) {
+export function UpcomingSlide({ slide, palette, showBranding, branding }: { slide: CreatorSlide; palette: CreatorPalette; showBranding: boolean; branding: CreatorBranding }) {
   const refs = slide.titleRefs.slice(0, 5);
   const subtitle = slide.subtitle.trim();
   return (
@@ -28,7 +28,7 @@ export function UpcomingSlide({ slide, palette, showBranding }: { slide: Creator
       )}
       <View style={styles.footer}>
         {slide.closing ? <SlideText style={[styles.closing, { color: palette.accent.primary }]} numberOfLines={1}>{slide.closing}</SlideText> : null}
-        {showBranding ? <BrandMark palette={palette} /> : null}
+        {showBranding ? <BrandMark palette={palette} label={branding.name} /> : null}
       </View>
     </View>
   );
