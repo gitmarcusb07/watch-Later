@@ -29,7 +29,7 @@ import { clampCreatorText, formatMaxSlides } from './validation';
  */
 
 export interface CreatorEditorState {
-  /** Set once the draft exists in Supabase. */
+  /** Set once the draft has been saved on this device. */
   projectId?: string;
   name: string;
   templateId: CreatorTemplateId;

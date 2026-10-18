@@ -35,12 +35,12 @@ describe('Phase 4 SQLite watch state', () => {
 
   afterEach(() => adapter.close());
 
-  it('migrates a fresh database to version 17 with watch state and durable sync tables', async () => {
+  it('migrates a fresh database to version 18 with watch state and durable sync tables', async () => {
     const version = await adapter.database.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
     const tables = await adapter.database.getAllAsync<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'");
     const indexes = await adapter.database.getAllAsync<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index'");
-    expect(version?.user_version).toBe(17);
-    expect(tables.map(({ name }) => name)).toEqual(expect.arrayContaining(['tracked_media', 'watchlist_entries', 'movie_watches', 'tracked_series', 'tracked_seasons', 'tracked_episodes', 'sync_queue', 'account_binding', 'favorite_entries', 'custom_lists', 'custom_list_items', 'user_ratings', 'list_folders', 'deleted_items', 'interested_entries', 'anime_progress']));
+    expect(version?.user_version).toBe(18);
+    expect(tables.map(({ name }) => name)).toEqual(expect.arrayContaining(['tracked_media', 'watchlist_entries', 'movie_watches', 'tracked_series', 'tracked_seasons', 'tracked_episodes', 'sync_queue', 'account_binding', 'favorite_entries', 'custom_lists', 'custom_list_items', 'user_ratings', 'list_folders', 'deleted_items', 'interested_entries', 'anime_progress', 'creator_drafts']));
     expect(indexes.map(({ name }) => name)).toEqual(expect.arrayContaining(['idx_watchlist_added', 'idx_movie_watches_date', 'idx_tracked_series_updated', 'idx_tracked_episodes_series_order', 'idx_tracked_episodes_watched']));
   });
 
@@ -130,7 +130,7 @@ describe('Phase 4 SQLite watch state', () => {
       'is_deleted', 'updated_at', 'payload', 'retry_count', 'last_error',
     ]));
     expect(queued).toMatchObject({ id: 1, entity_type: 'movie', entity_key: 'tmdb:movie:7', provider_id: '7', updated_at: '2026-01-02T03:04:05.000Z', payload: '{}', retry_count: 2, last_error: 'retry later' });
-    expect(version?.user_version).toBe(17);
+    expect(version?.user_version).toBe(18);
 
     await runMigrations(legacy.database);
     expect(await legacy.database.getFirstAsync<{ count: number }>('SELECT COUNT(*) AS count FROM sync_queue')).toEqual({ count: 1 });
@@ -144,7 +144,7 @@ describe('Phase 4 SQLite watch state', () => {
     const preserved = await legacy.database.getFirstAsync<{ value: string }>("SELECT value FROM app_metadata WHERE key = 'install'");
     const versions = await legacy.database.getAllAsync<{ version: number }>('SELECT version FROM schema_migrations ORDER BY version');
     expect(preserved?.value).toBe('kept');
-    expect(versions.map(({ version }) => version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(versions.map(({ version }) => version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
     legacy.close();
   });
 

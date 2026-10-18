@@ -261,7 +261,7 @@ describe('migration to v8', () => {
       VALUES ('movie', 'tmdb:movie:7', 'tmdb', 'movie', '7', 0, '2026-01-02T03:04:05.000Z', '{}');
     `);
     await runMigrations(adapter.database);
-    expect(await adapter.database.getFirstAsync<{ user_version: number }>('PRAGMA user_version')).toMatchObject({ user_version: 17 });
+    expect(await adapter.database.getFirstAsync<{ user_version: number }>('PRAGMA user_version')).toMatchObject({ user_version: 18 });
     const tables = await adapter.database.getAllAsync<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'");
     expect(tables.map(({ name }) => name)).toEqual(expect.arrayContaining(['user_ratings']));
     const queued = await adapter.database.getFirstAsync<{ entity_key: string; payload: string }>('SELECT * FROM sync_queue WHERE entity_key = ?', 'tmdb:movie:7');
