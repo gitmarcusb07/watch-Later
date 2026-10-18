@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { openURL } from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
-import { Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { AppButton } from '@/components/buttons/AppButton';
 import { IconButton } from '@/components/buttons/IconButton';
 import { AppText } from '@/components/common/AppText';
@@ -25,6 +25,7 @@ import { colors, radius, spacing, typography } from '@/theme';
 const filters: { label: string; value: CatalogFilter }[] = [
   { label: 'All', value: 'all' }, { label: 'Movies', value: 'movies' },
   { label: 'Shows', value: 'series' }, { label: 'Anime', value: 'anime' },
+  { label: 'Upcoming', value: 'upcoming' },
 ];
 
 const suggestions = ['Dune', 'Breaking Bad', 'Spirited Away', 'The Batman'];
@@ -82,10 +83,12 @@ export default function SearchScreen() {
       <TextInput accessibilityLabel="Search movies, shows and anime" placeholder="Try a title…" placeholderTextColor={colors.textMuted} value={query} onChangeText={changeQuery} returnKeyType="search" onSubmitEditing={Keyboard.dismiss} style={styles.input} selectionColor={colors.accent} />
       {query.length > 0 ? <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => changeQuery('')} hitSlop={12}><Ionicons name="close-circle" size={20} color={colors.textSecondary} /></Pressable> : null}
     </View>
-    <View style={styles.filters}>{filters.map((item) => {
-      const selected = item.value === filter;
-      return <Pressable key={item.value} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { if (!selected) triggerLightHaptic(); setFilter(item.value); }} style={[styles.filter, selected && styles.filterActive]}><AppText variant="label" style={selected ? styles.filterTextActive : styles.filterText}>{item.label}</AppText></Pressable>;
-    })}</View>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters} keyboardShouldPersistTaps="handled">
+      {filters.map((item) => {
+        const selected = item.value === filter;
+        return <Pressable key={item.value} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { if (!selected) triggerLightHaptic(); setFilter(item.value); }} style={[styles.filter, selected && styles.filterActive]}><AppText variant="label" style={selected ? styles.filterTextActive : styles.filterText}>{item.label}</AppText></Pressable>;
+      })}
+    </ScrollView>
     {!normalized ? <View style={styles.empty}><EmptyState icon="search-outline" title="What are you in the mood for?" message="Search the catalog, then tap + to save to your watchlist or ✓ to mark watched." /><View style={styles.suggestRow}>{suggestions.map((suggestion) => <Pressable key={suggestion} accessibilityRole="button" accessibilityLabel={`Search for ${suggestion}`} onPress={() => changeQuery(suggestion)} style={styles.suggestChip}><Ionicons name="sparkles-outline" size={14} color={colors.accent} /><AppText variant="label" style={styles.suggestText}>{suggestion}</AppText></Pressable>)}</View></View>
       : searching && !search.data?.items.length ? <View style={styles.results}><AppText variant="heading3" style={styles.resultTitle}>Searching the catalog</AppText>{[0, 1, 2].map((index) => <SearchResultSkeleton key={index} />)}</View>
       : search.isError && !search.data?.items.length ? <View style={styles.error}><ErrorView message={errorMessage} onRetry={() => void search.refetch()} /></View>
@@ -111,8 +114,8 @@ const styles = StyleSheet.create({
   inputWrap: { minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, marginTop: spacing.md },
   inputFilled: { borderColor: colors.accent },
   input: { flex: 1, color: colors.textPrimary, ...typography.body, fontSize: 17 },
-  filters: { flexDirection: 'row', gap: spacing.sm, paddingVertical: spacing.lg },
-  filter: { flex: 1, alignItems: 'center', paddingVertical: spacing.md, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  filters: { flexDirection: 'row', gap: spacing.sm, paddingVertical: spacing.lg, paddingRight: spacing.sm },
+  filter: { alignItems: 'center', paddingVertical: spacing.md, paddingHorizontal: spacing.xl, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
   filterActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   filterText: { color: colors.textSecondary },
   filterTextActive: { color: colors.white },

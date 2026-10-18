@@ -1,5 +1,5 @@
 import { CatalogError } from '@/domain/errors/CatalogError';
-import type { CatalogFilter, CatalogMedia, CatalogSeason, CatalogSearchResult, MediaEpisode, MediaIdentity, MediaProvider, SeasonSummary, WatchProviderGroup } from '@/domain/models/media';
+import type { CatalogFilter, CatalogMedia, CatalogMediaType, CatalogSeason, CatalogSearchResult, MediaEpisode, MediaIdentity, MediaProvider, SeasonSummary, WatchProviderGroup } from '@/domain/models/media';
 import type { CatalogRepository as CatalogRepositoryContract, GenrePageKind, PagedCatalog, SuggestionFilters, SuggestionSource } from '@/domain/repositories/CatalogRepository';
 import { imageUrl, getTmdbApiKey } from '@/data/remote/catalog/config';
 import { normalizeSearchText, rankSearchResults, type SearchPopularity } from '@/data/remote/catalog/searchRank';
@@ -34,6 +34,17 @@ function normalizeTitle(title: string): string {
   return normalizeSearchText(title);
 }
 
+/** The 4-digit year of a provider date ("2026" or "2026-12-24"); `year` is the fallback. */
+function itemYear(item: { releaseDate?: string; year?: number }): number | undefined {
+  const match = item.releaseDate?.match(/^(\d{4})/);
+  return match ? Number(match[1]) : item.year;
+}
+
+/** Gap dedupe treats a movie apart from the series/anime family. */
+function itemKind(item: { mediaType: CatalogMediaType }): 'movie' | 'tv' {
+  return item.mediaType === 'movie' ? 'movie' : 'tv';
+}
+
 /** Bounds a side-channel lookup so ranking never delays the visible results. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -47,6 +58,34 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 const SEARCH_POPULARITY_TIMEOUT_MS = 3_000;
 
+/** TMDb serves 20 rows per search page. */
+const TMDB_SEARCH_PAGE_SIZE = 20;
+
+/**
+ * TMDb search rows for a term, going one page deeper when the first page
+ * fills up: common queries push their exact-title releases just past the
+ * page edge (searching "king" puts the 2026 release at row 29), and one extra
+ * page is a bounded cost that keeps those findable. A short first page
+ * already ends the result set, so the second request is skipped.
+ */
+async function tmdbSearchRows<T extends { id?: number }>(run: (page: number) => Promise<{ results?: T[] }>): Promise<T[]> {
+  const first = await run(1);
+  const rows = [...(first.results ?? [])];
+  if (rows.length < TMDB_SEARCH_PAGE_SIZE) return rows;
+  try {
+    const second = await run(2);
+    const seen = new Set(rows.map((row) => row.id));
+    for (const row of second.results ?? []) {
+      if (row.id !== undefined && seen.has(row.id)) continue;
+      if (row.id !== undefined) seen.add(row.id);
+      rows.push(row);
+    }
+  } catch {
+    // Page two is best-effort; page one still ranks and fills gaps.
+  }
+  return rows;
+}
+
 /**
  * One TMDb search serves two jobs: the popularity signal that ranks the
  * merged results (TVDB ids differ, so titles are the join), and the English
@@ -59,8 +98,8 @@ async function fetchTmdbSearchSignal(term: string, signal?: AbortSignal): Promis
   if (!getTmdbApiKey()) return { popularity: new Map(), movies: [], tv: [] };
   try {
     const [movies, tv] = await withTimeout(Promise.all([
-      tmdbClient.searchMovies(term, signal),
-      tmdbClient.searchTv(term, signal),
+      tmdbSearchRows((page) => tmdbClient.searchMovies(term, signal, page)),
+      tmdbSearchRows((page) => tmdbClient.searchTv(term, signal, page)),
     ]), SEARCH_POPULARITY_TIMEOUT_MS);
     const popularity = new Map<string, number>();
     const record = (title: string | undefined, score: number | undefined) => {
@@ -68,9 +107,9 @@ async function fetchTmdbSearchSignal(term: string, signal?: AbortSignal): Promis
       const key = normalizeSearchText(title);
       if (key) popularity.set(key, Math.max(popularity.get(key) ?? 0, score));
     };
-    for (const dto of movies.results ?? []) record(dto.title, dto.popularity);
-    for (const dto of tv.results ?? []) record(dto.name, dto.popularity);
-    return { popularity, movies: movies.results ?? [], tv: tv.results ?? [] };
+    for (const dto of movies) record(dto.title, dto.popularity);
+    for (const dto of tv) record(dto.name, dto.popularity);
+    return { popularity, movies, tv };
   } catch {
     return { popularity: new Map(), movies: [], tv: [] };
   }
@@ -319,12 +358,17 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     // keeps every row — the user typed that script on purpose.
     const latinQuery = /[A-Za-z]/.test(term);
     const keepTitle = (item: CatalogMedia | null): item is CatalogMedia => item !== null && (!latinQuery || hasLatinTitle(item.title));
+    // "Upcoming" is a state filter, not a media type: every type is searched
+    // and the merged list is cut to future releases after ranking input is
+    // assembled.
+    const upcomingOnly = filter === 'upcoming';
+    const wantsEveryType = filter === 'all' || upcomingOnly;
     // TVDB is the catalog source of record: one dataset for movies, shows,
     // and anime (anime = series carrying the Anime genre).
     const tasks: { provider: MediaProvider; load: () => Promise<CatalogMedia[]> }[] = [];
-    if (filter === 'all' || filter === 'movies') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'movie', signal)).map(mapTvdbSearchItem).filter(keepTitle) });
-    if (filter === 'all' || filter === 'series') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'series') });
-    if (filter === 'all' || filter === 'anime') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'anime') });
+    if (wantsEveryType || filter === 'movies') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'movie', signal)).map(mapTvdbSearchItem).filter(keepTitle) });
+    if (wantsEveryType || filter === 'series') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'series') });
+    if (wantsEveryType || filter === 'anime') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'anime') });
     // The TMDb search runs in parallel with TVDB: it ranks the merged list,
     // and its rows fill gaps TVDB has no record of (upcoming releases).
     const tmdbSignal = fetchTmdbSearchSignal(term, signal);
@@ -334,15 +378,31 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     const unavailableProviders = [...new Set(settled.flatMap((result, index) => result.status === 'rejected' ? [tasks[index].provider] : []))];
     const fallback = await tmdbSignal;
     const tvdbItems = fulfilled.flat();
-    const tvdbTitles = new Set(tvdbItems.map((item) => normalizeTitle(item.title)));
-    // TMDb rows only fill gaps: a title TVDB already matched never appears
-    // twice (dedupe is by normalized title — provider ids never join).
-    const gapOnly = (items: CatalogMedia[]) => items.filter((item) => !tvdbTitles.has(normalizeTitle(item.title)));
+    // Gap dedupe keeps TVDB the source of record (title + kind + era): the
+    // same title from the same era is the same release, while a distant year
+    // is a different title entirely — TVDB's 2008 "King" must never hide the
+    // upcoming 2026 "King".
+    const tvdbIndex = new Map<string, { kind: 'movie' | 'tv'; year?: number }[]>();
+    for (const item of tvdbItems) {
+      const key = normalizeTitle(item.title);
+      const entry = { kind: itemKind(item), year: itemYear(item) };
+      const list = tvdbIndex.get(key);
+      if (list) list.push(entry); else tvdbIndex.set(key, [entry]);
+    }
+    const gapOnly = (items: CatalogMedia[]) => items.filter((item) => {
+      const candidates = tvdbIndex.get(normalizeTitle(item.title));
+      if (!candidates?.length) return true;
+      const kind = itemKind(item);
+      const year = itemYear(item);
+      return !candidates.some((candidate) => candidate.kind === kind
+        && (year === undefined || candidate.year === undefined || Math.abs(candidate.year - year) <= 1));
+    });
     const groups: CatalogMedia[][] = [tvdbItems];
-    if (filter === 'all' || filter === 'movies') groups.push(gapOnly(fallback.movies.map(mapTmdbMovie)));
-    if (filter === 'all' || filter === 'series') groups.push(gapOnly(fallback.tv.map(mapTmdbTv)));
+    if (wantsEveryType || filter === 'movies') groups.push(gapOnly(fallback.movies.map(mapTmdbMovie)));
+    if (wantsEveryType || filter === 'series') groups.push(gapOnly(fallback.tv.map(mapTmdbTv)));
     const merged = mergeCatalogResults(groups);
-    if (!merged.length) {
+    const visible = upcomingOnly ? merged.filter((item) => isUpcomingMedia(item)) : merged;
+    if (!visible.length) {
       // Nothing to show and a TVDB task failed: the search itself failed.
       const reason = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
       if (settled.some((result) => result.status === 'rejected')) {
@@ -353,7 +413,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     }
     // The exact/popular match the user typed lands first; provider order
     // only breaks full ties, so the top title never needs scrolling to find.
-    return { items: rankSearchResults(merged, term, fallback.popularity), unavailableProviders };
+    return { items: rankSearchResults(visible, term, fallback.popularity), unavailableProviders };
   }
 
   async getMedia(identity: MediaIdentity, signal?: AbortSignal): Promise<CatalogMedia> {

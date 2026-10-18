@@ -157,14 +157,18 @@ describe('creator slide canvases', () => {
     expect(text).toContain('2017');
   });
 
-  it('shows the collage cover with its swipe cue and the follow card with its handle', () => {
+  it('shows the collage cover with its feature strip, swipe cue, and the follow card CTA', () => {
     const cover: CreatorSlide = {
       ...createSlideForTemplate('collage-cover'),
       titleRefs: [ref({ title: 'Cover One' }), ref({ title: 'Cover Two', providerId: '2' })],
     };
     const coverText = textOf(renderCanvas('collage-cover', cover));
     expect(coverText).toContain('MOST ICONIC PICKS');
-    expect(coverText).toContain('SWIPE FOR THE FULL LIST →');
+    expect(coverText).toContain('SWIPE FOR THE FULL LIST');
+    // The center strip counts the deck honestly (two movie refs).
+    expect(coverText).toContain('02');
+    expect(coverText).toContain('FEATURED');
+    expect(coverText).toContain('2 MOVIES');
 
     const promo: CreatorSlide = {
       ...createSlideForTemplate('page-promo'),
@@ -174,7 +178,13 @@ describe('creator slide canvases', () => {
     expect(promoText).toContain('Cine Club');
     expect(promoText).toContain('@cineclub');
     expect(promoText).toContain('Nightly picks');
-    expect(promoText).toContain('FOLLOW FOR DAILY PICKS');
+    expect(promoText).toContain('DON’T MISS THE NEXT DROP');
+
+    // A closing note still carrying the cover's swipe cue reads wrong on the
+    // follow card, so the card substitutes its own follow CTA.
+    const cuedText = textOf(renderCanvas('page-promo', { ...promo, closing: 'Swipe for the full list →' }));
+    expect(cuedText).toContain('DON’T MISS THE NEXT DROP');
+    expect(cuedText).not.toContain('SWIPE FOR THE FULL LIST');
   });
 
   it('dispatches per slide layout over the project template', () => {
@@ -182,7 +192,7 @@ describe('creator slide canvases', () => {
     const text = textOf(renderCanvas('movie-spotlight', override));
     // The collage's empty-poster coach is unique to that layout.
     expect(text).toContain('Add up to 5 posters to build the collage');
-    expect(text).toContain('SWIPE FOR THE FULL LIST →');
+    expect(text).toContain('SWIPE FOR THE FULL LIST');
   });
 
   it('renders the light variant with a different surface than the dark one', () => {

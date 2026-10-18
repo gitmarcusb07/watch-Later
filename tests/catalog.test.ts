@@ -306,6 +306,73 @@ describe('catalog request and provider clients', () => {
     expect(result.items.map((item) => item.title)).toEqual(['Brand New Day']);
   });
 
+  it('keeps a same-name title from a different era instead of folding it into TVDB', async () => {
+    process.env.EXPO_PUBLIC_TMDB_API_KEY = 'test-key';
+    const tvdbKing = {
+      objectID: 'movie-47177', type: 'movie', tvdb_id: '47177', name: 'King', overview: 'Story',
+      image_url: 'https://artworks.thetvdb.com/banners/v4/movie/47177/posters/x.jpg', year: '2008',
+      genres: ['Drama'], status: 'Released', primary_language: 'eng',
+    };
+    jest.spyOn(tvdbClient, 'search').mockImplementation(async (_query, type) => (type === 'movie' ? [tvdbKing] : []));
+    jest.spyOn(tmdbClient, 'searchMovies').mockResolvedValue({
+      results: [{ id: 1145110, title: 'King', release_date: '2026-12-24', original_language: 'hi', popularity: 2.8 }],
+    } as never);
+    jest.spyOn(tmdbClient, 'searchTv').mockResolvedValue({ results: [] } as never);
+    const result = await new RemoteCatalogRepository().search('king', 'all');
+    // TVDB's 2008 "King" is a different film: the upcoming 2026 "King" must
+    // surface beside it, not be swallowed as a duplicate title.
+    expect(result.items.map((item) => item.id).sort()).toEqual(['tmdb:movie:1145110', 'tvdb:movie:47177']);
+
+    // The same title in a matching era still folds into the TVDB record.
+    jest.spyOn(tmdbClient, 'searchMovies').mockResolvedValue({
+      results: [{ id: 55, title: 'King', release_date: '2008-05-01', popularity: 3 }],
+    } as never);
+    const sameEra = await new RemoteCatalogRepository().search('king', 'all');
+    expect(sameEra.items.map((item) => item.id)).toEqual(['tvdb:movie:47177']);
+  });
+
+  it('checks a second TMDb search page when the first one fills up', async () => {
+    process.env.EXPO_PUBLIC_TMDB_API_KEY = 'test-key';
+    jest.spyOn(tvdbClient, 'search').mockResolvedValue([] as never);
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      id: 2000 + index, title: `King Story ${index + 1}`, release_date: '2024-01-01', popularity: 1,
+    }));
+    const searchMovies = jest.spyOn(tmdbClient, 'searchMovies').mockImplementation((async (_query: string, _signal?: AbortSignal, page = 1) => (
+      page === 2
+        ? { results: [{ id: 1145110, title: 'King', release_date: '2099-12-24', original_language: 'hi', popularity: 2.8 }] }
+        : { results: firstPage }
+    )) as never);
+    jest.spyOn(tmdbClient, 'searchTv').mockResolvedValue({ results: [] } as never);
+    const result = await new RemoteCatalogRepository().search('king', 'all');
+    // A full first page means a common term whose exact title sits just past
+    // the edge ("king" puts the 2026 release at row 29); the second page is
+    // fetched so it stays findable.
+    expect(searchMovies).toHaveBeenCalledWith('king', undefined, 2);
+    expect(result.items.map((item) => item.id)).toContain('tmdb:movie:1145110');
+  });
+
+  it('narrows to future releases when the upcoming filter is selected', async () => {
+    process.env.EXPO_PUBLIC_TMDB_API_KEY = 'test-key';
+    const tvdbKing = {
+      objectID: 'movie-47177', type: 'movie', tvdb_id: '47177', name: 'King', overview: 'Story',
+      image_url: 'https://artworks.thetvdb.com/banners/v4/movie/47177/posters/x.jpg', year: '2008',
+      genres: ['Drama'], status: 'Released', primary_language: 'eng',
+    };
+    jest.spyOn(tvdbClient, 'search').mockImplementation(async (_query, type) => (type === 'movie' ? [tvdbKing] : []));
+    jest.spyOn(tmdbClient, 'searchMovies').mockResolvedValue({
+      results: [
+        { id: 1145110, title: 'King', release_date: '2099-12-24', original_language: 'hi', popularity: 2.8 },
+        { id: 8587, title: 'The Lion King', release_date: '1994-06-15', popularity: 37.5 },
+      ],
+    } as never);
+    jest.spyOn(tmdbClient, 'searchTv').mockResolvedValue({ results: [] } as never);
+    const result = await new RemoteCatalogRepository().search('king', 'upcoming');
+    // Released rows (TVDB's 2008 "King", TMDb's 1994 "The Lion King") drop
+    // out; the dated future release remains, with its full date intact.
+    expect(result.items.map((item) => item.id)).toEqual(['tmdb:movie:1145110']);
+    expect(result.items[0].releaseDate).toBe('2099-12-24');
+  });
+
   it('lists popular anime from AniList with English titles, not TVDB Japanese names', async () => {
     const dto = {
       ...animeDto,

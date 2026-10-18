@@ -13,11 +13,18 @@ function handleLabel(handle: string): string | undefined {
   return clean ? `@${clean}` : undefined;
 }
 
+/** The follow CTA the card falls back to when its closing note is just the cover's swipe cue. */
+const DEFAULT_CTA = 'Don’t miss the next drop';
+/** Swipe copy belongs to the cover slide, never to the follow card. */
+const SWIPE_CUE = /^swipe\b/i;
+
 /**
  * Closing slide: brand profile card over a backdrop (or the accent gradient
  * when no title is attached) with a follow call-to-action — the "if you like
  * this, follow the page" card of a carousel. The page identity comes from the
- * project's branding fields; nothing here is invented.
+ * project's branding fields; nothing here is invented. A closing note that is
+ * still the cover's swipe cue ("Swipe for the full list") reads wrong on the
+ * final slide of the carousel, so the card substitutes its own follow CTA.
  */
 export function PagePromoSlide({ slide, palette, showBranding, branding }: {
   slide: CreatorSlide;
@@ -30,6 +37,7 @@ export function PagePromoSlide({ slide, palette, showBranding, branding }: {
   const handle = handleLabel(branding.handle);
   const tagline = branding.tagline.trim();
   const closing = slide.closing.trim();
+  const cta = !closing ? undefined : SWIPE_CUE.test(closing) ? DEFAULT_CTA : closing;
   const subtitle = slide.subtitle.trim();
   return (
     <View style={styles.root}>
@@ -59,10 +67,11 @@ export function PagePromoSlide({ slide, palette, showBranding, branding }: {
             </View>
           </View>
         ) : null}
-        {closing ? (
-          <View style={[styles.cta, { backgroundColor: palette.accent.primary }]}>
-            <Ionicons name="person-add-outline" size={12} color={palette.accent.ink} />
-            <SlideText style={[styles.ctaText, { color: palette.accent.ink }]} numberOfLines={1}>{closing.toUpperCase()}</SlideText>
+        {cta ? (
+          <View style={[styles.cta, { backgroundColor: palette.accent.primary, shadowColor: palette.shadow }]}>
+            <Ionicons name="notifications-outline" size={13} color={palette.accent.ink} />
+            <SlideText style={[styles.ctaText, { color: palette.accent.ink }]} numberOfLines={1} adjustsFontSizeToFit>{cta.toUpperCase()}</SlideText>
+            <Ionicons name="arrow-forward" size={13} color={palette.accent.ink} />
           </View>
         ) : null}
       </View>
@@ -80,6 +89,6 @@ const styles = StyleSheet.create({
   cardText: { flex: 1, minWidth: 0, gap: 1 },
   cardName: { fontSize: 15, lineHeight: 18, fontWeight: '800' },
   cardLine: { fontSize: 10.5, lineHeight: 13.5, fontWeight: '500' },
-  cta: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8, marginTop: 16 },
-  ctaText: { fontSize: 11, lineHeight: 13, fontWeight: '800', letterSpacing: 1.1 },
+  cta: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 999, paddingHorizontal: 20, paddingVertical: 11, marginTop: 18, minWidth: 250, justifyContent: 'center', shadowOpacity: 0.32, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
+  ctaText: { fontSize: 12, lineHeight: 15, fontWeight: '800', letterSpacing: 1.2, flexShrink: 1 },
 });

@@ -116,7 +116,11 @@ export interface CatalogSeason {
   episodes: MediaEpisode[];
 }
 
-export type CatalogFilter = 'all' | 'movies' | 'series' | 'anime';
+/**
+ * Search facets: a media type, everything, or content state ("upcoming" cuts
+ * the merged results to future releases — it is not a media type).
+ */
+export type CatalogFilter = 'all' | 'movies' | 'series' | 'anime' | 'upcoming';
 
 export interface CatalogSearchResult {
   items: CatalogMedia[];

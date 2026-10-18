@@ -9,13 +9,13 @@ export function buildTmdbUrl(path: string, values: Record<string, string | numbe
 }
 
 export const tmdbClient = {
-  async searchMovies(query: string, signal?: AbortSignal) {
-    const response = await requestJson<TmdbListDto<TmdbMovieDto>>('tmdb', buildTmdbUrl('search/movie', { query, include_adult: 'false' }), {}, signal);
+  async searchMovies(query: string, signal?: AbortSignal, page = 1) {
+    const response = await requestJson<TmdbListDto<TmdbMovieDto>>('tmdb', buildTmdbUrl('search/movie', { query, include_adult: 'false', page: Math.max(1, page) }), {}, signal);
     if (!response || !Array.isArray(response.results)) throw new CatalogError('tmdb', 'invalid_response');
     return response;
   },
-  async searchTv(query: string, signal?: AbortSignal) {
-    const response = await requestJson<TmdbListDto<TmdbTvDto>>('tmdb', buildTmdbUrl('search/tv', { query }), {}, signal);
+  async searchTv(query: string, signal?: AbortSignal, page = 1) {
+    const response = await requestJson<TmdbListDto<TmdbTvDto>>('tmdb', buildTmdbUrl('search/tv', { query, page: Math.max(1, page) }), {}, signal);
     if (!response || !Array.isArray(response.results)) throw new CatalogError('tmdb', 'invalid_response');
     return response;
   },

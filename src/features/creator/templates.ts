@@ -79,7 +79,7 @@ export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
     maxSlides: CREATOR_MAX_SLIDES,
     defaultHeadline: 'FOLLOW FOR MORE',
     defaultSubtitle: 'Daily picks, straight from my watchlist',
-    defaultClosing: 'Follow for daily picks',
+    defaultClosing: 'Don’t miss the next drop',
   },
   {
     id: 'movie-spotlight',

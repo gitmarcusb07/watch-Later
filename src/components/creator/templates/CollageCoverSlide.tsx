@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
-import type { CreatorBranding, CreatorSlide } from '@/domain/models/creator';
+import type { CreatorBranding, CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
 import type { CreatorPalette } from '../palette';
 import { BrandMark, SlidePoster, SlideText } from '../primitives';
 
@@ -21,10 +21,23 @@ function tileStyle(index: number, count: number) {
   };
 }
 
+/** "3 MOVIES · 2 SHOWS" — counted from the refs actually fanned on the cover. */
+function refsMix(refs: readonly CreatorTitleRef[]): string | undefined {
+  const counts = { movie: 0, series: 0, anime: 0 };
+  for (const ref of refs) counts[ref.mediaType] += 1;
+  const parts: string[] = [];
+  if (counts.movie) parts.push(`${counts.movie} ${counts.movie === 1 ? 'MOVIE' : 'MOVIES'}`);
+  if (counts.series) parts.push(`${counts.series} ${counts.series === 1 ? 'SHOW' : 'SHOWS'}`);
+  if (counts.anime) parts.push(`${counts.anime} ANIME`);
+  return parts.length ? parts.join('  ·  ') : undefined;
+}
+
 /**
- * Carousel cover: a fanned poster deck up top with a giant stacked headline
- * burning through the scrim below. The `closing` line doubles as the swipe
- * cue ("Swipe for the full list →"); clear it for a standalone cover post.
+ * Carousel cover: a fanned poster deck up top, a between-the-lines feature
+ * strip (how many picks, what kind) bridging the middle, and a giant stacked
+ * headline burning through the scrim below. The `closing` line doubles as the
+ * swipe cue ("Swipe for the full list"); clear it for a standalone cover
+ * post — a trailing arrow in the copy is dropped so the cue never doubles it.
  */
 export function CollageCoverSlide({ slide, palette, showBranding, branding }: {
   slide: CreatorSlide;
@@ -35,7 +48,8 @@ export function CollageCoverSlide({ slide, palette, showBranding, branding }: {
   const refs = slide.titleRefs.slice(0, 5);
   const headline = slide.headline.trim() || 'MOST ICONIC PICKS';
   const subtitle = slide.subtitle.trim();
-  const closing = slide.closing.trim();
+  const closing = slide.closing.trim().replace(/[\s→➜>-]+$/u, '');
+  const mix = refsMix(refs);
   return (
     <View style={styles.root}>
       <View style={styles.collage} pointerEvents="none">
@@ -62,6 +76,27 @@ export function CollageCoverSlide({ slide, palette, showBranding, branding }: {
         pointerEvents="none"
       />
       {showBranding ? <BrandMark palette={palette} label={branding.name} style={styles.brand} /> : null}
+      {refs.length ? (
+        <View style={styles.detail} pointerEvents="none">
+          <LinearGradient
+            colors={[palette.accentSoft, 'transparent']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={styles.glow}
+          />
+          <View style={styles.ornament}>
+            <View style={[styles.ornamentLine, { backgroundColor: palette.accent.primary }]} />
+            <View style={[styles.ornamentDot, { borderColor: palette.accent.primary }]} />
+          </View>
+          <View style={styles.detailRow}>
+            <SlideText style={[styles.detailCount, { color: palette.text }]} numberOfLines={1}>{String(refs.length).padStart(2, '0')}</SlideText>
+            <View style={styles.detailLabels}>
+              <SlideText style={[styles.detailLabel, { color: palette.accent.primary }]} numberOfLines={1}>FEATURED</SlideText>
+              {mix ? <SlideText style={[styles.detailMix, { color: palette.textSecondary }]} numberOfLines={1}>{mix}</SlideText> : null}
+            </View>
+          </View>
+        </View>
+      ) : null}
       <View style={styles.content}>
         <SlideText style={[styles.headline, { color: palette.text }]} numberOfLines={3} adjustsFontSizeToFit>{headline}</SlideText>
         {subtitle ? <SlideText style={[styles.subtitle, { color: palette.textSecondary }]} numberOfLines={2}>{subtitle}</SlideText> : null}
@@ -84,6 +119,16 @@ const styles = StyleSheet.create({
   placeholderText: { fontSize: 11, lineHeight: 15, textAlign: 'center' },
   scrim: { position: 'absolute', left: 0, right: 0, top: 96, bottom: 0 },
   brand: { position: 'absolute', top: 16, left: 18 },
+  detail: { position: 'absolute', left: 18, right: 18, top: 222, gap: 8 },
+  glow: { position: 'absolute', left: -20, right: -20, top: -34, height: 150, borderRadius: 999 },
+  ornament: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  ornamentLine: { width: 30, height: 2, borderRadius: 1 },
+  ornamentDot: { width: 5, height: 5, borderRadius: 2.5, borderWidth: 1.5 },
+  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  detailCount: { fontSize: 36, lineHeight: 40, fontWeight: '900', letterSpacing: 0.5 },
+  detailLabels: { flex: 1, minWidth: 0, gap: 1 },
+  detailLabel: { fontSize: 10, lineHeight: 12.5, fontWeight: '800', letterSpacing: 2.2 },
+  detailMix: { fontSize: 9.5, lineHeight: 12, fontWeight: '600', letterSpacing: 1.1 },
   content: { position: 'absolute', left: 18, right: 18, bottom: 16 },
   headline: { fontSize: 30, lineHeight: 31, fontWeight: '900', letterSpacing: 0.6 },
   subtitle: { fontSize: 12, lineHeight: 16, marginTop: 6, fontWeight: '500' },
