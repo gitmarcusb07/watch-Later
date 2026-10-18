@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/common/AppText';
 import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
+import { slideRankOffset } from '@/features/creator/templates';
 import { colors, radius, spacing } from '@/theme';
 import type { CreatorProjectData, CreatorTemplateId } from '@/domain/models/creator';
 
@@ -47,7 +48,7 @@ export function PreviewPager({ templateId, data, index, onChangeIndex, pageWidth
         }}
         style={styles.pager}
       >
-        {data.slides.map((slide) => (
+        {data.slides.map((slide, slideIndex) => (
           <View key={slide.id} style={[styles.page, { width: pageWidth }]}>
             <View style={styles.canvasWrap}>
               <CreatorSlideCanvas
@@ -59,6 +60,7 @@ export function PreviewPager({ templateId, data, index, onChangeIndex, pageWidth
                 slide={slide}
                 width={width}
                 radius={radius.large}
+                rankOffset={slideRankOffset(data.slides, templateId, slideIndex)}
               />
             </View>
           </View>

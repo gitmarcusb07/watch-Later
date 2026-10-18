@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/common/AppText';
 import { IconButton } from '@/components/buttons/IconButton';
 import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
+import { slideRankOffset } from '@/features/creator/templates';
 import { colors, radius, spacing } from '@/theme';
 import type { CreatorProjectData, CreatorSlide, CreatorTemplateId } from '@/domain/models/creator';
 
@@ -50,6 +51,7 @@ export function SlideRail({ templateId, data, slides, index, canAddSlide, onSele
                 branding={data.branding}
                 slide={slide}
                 width={THUMB_WIDTH}
+                rankOffset={slideRankOffset(slides, templateId, slideIndex)}
               />
               <View style={[styles.thumbBadge, selected && styles.thumbBadgeActive]}>
                 <AppText variant="caption" color={selected ? colors.background : colors.textSecondary} style={styles.thumbBadgeText}>{slideIndex + 1}</AppText>

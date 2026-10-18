@@ -17,6 +17,8 @@ export function renderSlideTemplate(
   palette: CreatorPalette,
   showBranding: boolean,
   branding: CreatorBranding,
+  /** Ranks consumed by earlier slides in a continuous numbered run (see `slideRankOffset`). */
+  rankOffset = 0,
 ): ReactElement {
   const common = { slide, palette, showBranding, branding };
   switch (templateId) {
@@ -31,7 +33,7 @@ export function renderSlideTemplate(
     case 'series-spotlight':
       return <SpotlightSlide variant="series" {...common} />;
     case 'top5':
-      return <RankedListSlide {...common} />;
+      return <RankedListSlide {...common} rankOffset={rankOffset} />;
     case 'movie-comparison':
       return <ComparisonSlide {...common} />;
     case 'watchlist-collection':

@@ -96,3 +96,19 @@ query TopRatedAnime($page: Int!, $perPage: Int!) {
     }
   }
 }`;
+
+/**
+ * The creator picker's anime rail: one query carrying every filter the UI
+ * can combine (sort, genre, season year, status, popularity floor). Nullable
+ * variables are simply omitted from the request — AniList applies no filter
+ * for them.
+ */
+export const ANIME_SUGGEST_PAGE_QUERY = `
+query SuggestAnimePage($page: Int!, $perPage: Int!, $sort: [MediaSort], $genre: [String], $seasonYear: Int, $status: MediaStatus, $popularityGreater: Int) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { total perPage currentPage lastPage hasNextPage }
+    media(type: ANIME, sort: $sort, isAdult: false, genre_in: $genre, seasonYear: $seasonYear, status: $status, popularity_greater: $popularityGreater) {
+      ${ANIME_FIELDS}
+    }
+  }
+}`;

@@ -3,6 +3,7 @@ import { Image, StyleSheet, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import type { CreatorProjectData, CreatorTemplateId } from '@/domain/models/creator';
 import type { ExportSlidePlan } from '@/features/creator/exportPlan';
+import { slideRankOffset } from '@/features/creator/templates';
 import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
 
 /**
@@ -80,8 +81,9 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
   const node = request ? (
     <View style={styles.stage} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessible={false}>
       {request.plan.map((item) => {
-        const slide = data.slides.find((candidate) => candidate.id === item.slideId);
-        if (!slide) return null;
+        const slideIndex = data.slides.findIndex((candidate) => candidate.id === item.slideId);
+        if (slideIndex < 0) return null;
+        const slide = data.slides[slideIndex];
         return (
           <View
             key={item.slideId}
@@ -96,6 +98,7 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
               showBranding={data.showBranding}
               branding={data.branding}
               slide={slide}
+              rankOffset={slideRankOffset(data.slides, templateId, slideIndex)}
             />
           </View>
         );

@@ -8,6 +8,7 @@ import type { CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
  */
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const YEAR_ONLY = /^\d{4}$/;
@@ -24,15 +25,21 @@ export function formatSlideDate(value?: string): string | undefined {
   return `${day} ${MONTHS[month - 1]} ${match[1]}`;
 }
 
-/** Day/month split for the upcoming-release date pill. */
-export function splitSlideDate(value?: string): { top: string; bottom: string } | undefined {
+/** Day/month split for the upcoming-release pill, with the weekday the date lands on. */
+export function splitSlideDate(value?: string): { top: string; bottom: string; weekday?: string } | undefined {
   if (!value) return undefined;
   const full = DATE_ONLY.exec(value);
   if (full) {
+    const year = Number(full[1]);
     const month = Number(full[2]);
     const day = Number(full[3]);
-    if (month < 1 || month > 12) return undefined;
-    return { top: String(day), bottom: MONTHS[month - 1].toUpperCase() };
+    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+    if (day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return undefined;
+    return {
+      top: String(day),
+      bottom: MONTHS[month - 1].toUpperCase(),
+      weekday: WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()],
+    };
   }
   if (YEAR_ONLY.test(value)) return { top: value, bottom: 'YEAR' };
   return undefined;

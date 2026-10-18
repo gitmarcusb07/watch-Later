@@ -2,6 +2,7 @@ import {
   CREATOR_MAX_SLIDES,
   CREATOR_TEMPLATE_IDS,
   type CreatorFormat,
+  type CreatorSlide,
   type CreatorTemplateId,
 } from '@/domain/models/creator';
 
@@ -195,6 +196,24 @@ export function slideLayoutOf(slide: { layout?: CreatorTemplateId }, templateId:
 /** True when a slide should show the ranked-position marker. */
 export function templateRanksTitles(id: CreatorTemplateId): boolean {
   return id === 'top5';
+}
+
+/**
+ * The rank the first title of `slides[index]` carries when ranked layouts
+ * number continuously: the rendered title count of every earlier ranked
+ * slide (capped per slide like its renderer caps it). A ranked carousel
+ * counts 1..N across slides — 01–05, then 06–10 — instead of restarting on
+ * every page.
+ */
+export function slideRankOffset(slides: readonly CreatorSlide[], templateId: CreatorTemplateId, index: number): number {
+  let offset = 0;
+  for (let position = 0; position < index && position < slides.length; position += 1) {
+    const slide = slides[position];
+    const layout = slideLayoutOf(slide, templateId);
+    if (!templateRanksTitles(layout)) continue;
+    offset += Math.min(slide.titleRefs.length, creatorTemplate(layout).maxTitles);
+  }
+  return offset;
 }
 
 /** True when a slide shows release dates as a first-class column. */

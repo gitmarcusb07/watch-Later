@@ -1,16 +1,15 @@
-import { LinearGradient } from 'expo-linear-gradient';
-import { StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 import type { CreatorBranding, CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
 import type { CreatorPalette } from '../palette';
 import { BrandMark, RatingBadge, SlidePoster, SlideText, joinMeta } from '../primitives';
 import { formatScore, mediaTypeLabel } from '@/features/creator/slideText';
 
 /**
- * The stacked list: up to five full-bleed rows, one title each. Rows carry
- * wide artwork when the snapshot has it (posters crop in as fallback), the
- * title over a left scrim, a year chip, and honest rating badges — the yellow
- * IMDb pill only when a real matched score exists, otherwise the TMDb star.
- * A filled subtitle renders as the big display line (the "2017" of a
+ * The stacked list: up to five rows, one title each. Each row carries the
+ * title's own artwork as a soft blurred tint behind a poster thumb, the title
+ * and a meta line, a year chip, and honest rating badges — the yellow IMDb
+ * pill only when a real matched score exists, otherwise the TMDb star. A
+ * filled subtitle renders as the big display line (the "2017" of a
  * year-by-year carousel); without one, the headline itself is the display.
  */
 export function StackedRankingSlide({ slide, palette, showBranding, branding }: {
@@ -61,17 +60,20 @@ function Row({ refItem, slide }: { refItem: CreatorTitleRef; slide: CreatorSlide
     mediaTypeLabel(refItem),
     slide.showGenres ? refItem.genres[0] : undefined,
   ]);
+  // The title's own artwork as a soft blurred tint behind a poster thumb: a
+  // full-bleed crop of a wide backdrop clips faces at row height (the old
+  // look), while a bare poster leaves dead space — the blur bridges both.
+  const tint = refItem.backdropUrl ?? refItem.posterUrl;
   return (
     <View style={styles.row}>
-      <SlidePoster uri={refItem.backdropUrl ?? refItem.posterUrl} title={refItem.title} radius={12} style={StyleSheet.absoluteFill} />
-      <LinearGradient
-        colors={['rgba(8,5,16,0.88)', 'rgba(8,5,16,0.44)', 'rgba(8,5,16,0.16)']}
-        start={{ x: 0, y: 0.5 }}
-        end={{ x: 0.78, y: 0.5 }}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
+      {tint ? (
+        <>
+          <Image source={{ uri: tint }} style={StyleSheet.absoluteFill} resizeMode="cover" blurRadius={14} />
+          <View style={styles.rowShade} pointerEvents="none" />
+        </>
+      ) : null}
       <View style={styles.rowContent}>
+        <SlidePoster uri={refItem.posterUrl ?? refItem.backdropUrl} title={refItem.title} radius={7} style={styles.rowPoster} />
         <View style={styles.rowText}>
           <SlideText style={styles.rowTitle} numberOfLines={2} adjustsFontSizeToFit>{refItem.title}</SlideText>
           {meta ? <SlideText style={styles.rowMeta} numberOfLines={1}>{meta}</SlideText> : null}
@@ -102,7 +104,9 @@ const styles = StyleSheet.create({
   headline: { fontSize: 25, lineHeight: 29, fontWeight: '800', letterSpacing: 0.4 },
   rows: { flex: 1, gap: 6 },
   row: { flex: 1, minHeight: 0, borderRadius: 12, overflow: 'hidden', backgroundColor: '#241F36' },
-  rowContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 5, gap: 8 },
+  rowShade: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(20,14,34,0.78)' },
+  rowContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, gap: 9 },
+  rowPoster: { width: 32, height: 48 },
   rowText: { flex: 1, minWidth: 0, gap: 1 },
   rowTitle: { fontSize: 14, lineHeight: 16.5, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.1 },
   rowMeta: { fontSize: 9.5, lineHeight: 12, fontWeight: '600', color: 'rgba(255,255,255,0.72)', letterSpacing: 0.4 },

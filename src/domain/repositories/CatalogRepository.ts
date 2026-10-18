@@ -53,22 +53,35 @@ export interface CatalogRepository {
   /** Paged titles for one genre, scoped to a shelf (`all`, `movies`, `shows`, `anime`). */
   getGenrePage(page: number, genreId: number, kind: GenrePageKind, signal?: AbortSignal): Promise<PagedCatalog>;
   /**
-   * Paged all-time top-rated titles (TMDb top-rated movies + series, mixed).
-   * A genuinely rating-first list — unlike `getTopRated`, which ranks by
-   * favorite counts because TVDB publishes no scores.
+   * One page of combined creator-picker suggestions: a ranking source
+   * narrowed by any mix of kind, industry, year, and genre. Every slice is
+   * built from the same provider queries the browse shelves use, so a
+   * suggestion rail can never invent a title or a score.
    */
-  getTopRatedTitlesPage(page: number, signal?: AbortSignal): Promise<PagedCatalog>;
-  /**
-   * Paged worst-rated released titles that a real audience still watched
-   * (vote floor), so "flops" are tried-and-missed, not obscure.
-   */
-  getFlopsPage(page: number, signal?: AbortSignal): Promise<PagedCatalog>;
-  /** Paged best-rated released titles of one calendar year (movies + series). */
-  getYearPage(page: number, year: number, signal?: AbortSignal): Promise<PagedCatalog>;
+  getSuggestionPage(page: number, filters: SuggestionFilters, signal?: AbortSignal): Promise<PagedCatalog>;
 }
 
 /** Which shelf of a genre screen is showing. */
 export type GenrePageKind = 'all' | 'movies' | 'shows' | 'anime';
+
+/** Which ranking a picker suggestion rail shows. */
+export type SuggestionSource = 'popular' | 'top-rated' | 'flops' | 'new' | 'upcoming';
+
+/** Which media kinds a rail includes. `all` mixes movies + shows (+ anime on page one). */
+export type SuggestionKind = 'all' | 'movies' | 'shows' | 'anime';
+
+/** Language scope: Hollywood = English originals, Bollywood = Hindi originals. */
+export type SuggestionIndustry = 'all' | 'hollywood' | 'bollywood';
+
+export interface SuggestionFilters {
+  source: SuggestionSource;
+  kind: SuggestionKind;
+  industry: SuggestionIndustry;
+  /** Release year (movies) / first-air year (shows) / season year (anime). */
+  year?: number;
+  /** TMDb genre id from the app's genre grid. */
+  genreId?: number;
+}
 
 export interface PagedCatalog {
   items: CatalogMedia[];

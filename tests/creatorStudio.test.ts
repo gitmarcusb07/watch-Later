@@ -560,7 +560,7 @@ describe('creator slide text rules', () => {
   });
 
   it('splits dates for the upcoming pill and marks unknown ones', () => {
-    expect(splitSlideDate('2027-03-15')).toEqual({ top: '15', bottom: 'MAR' });
+    expect(splitSlideDate('2027-03-15')).toEqual({ top: '15', bottom: 'MAR', weekday: 'MON' });
     expect(splitSlideDate('2027')).toEqual({ top: '2027', bottom: 'YEAR' });
     expect(splitSlideDate('tomorrow')).toBeUndefined();
     expect(splitSlideDate(undefined)).toBeUndefined();

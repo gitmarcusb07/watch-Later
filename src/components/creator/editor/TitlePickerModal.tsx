@@ -6,24 +6,23 @@ import { AppButton } from '@/components/buttons/AppButton';
 import { AppText } from '@/components/common/AppText';
 import { ErrorView, LoadingView } from '@/components/feedback/FeedbackViews';
 import { SegmentedTabs } from '@/components/creator/editor/controls';
-import { useCatalogSearch, useFlopPages, useRecentlyReleased, useTopRatedTitlesPages, useTrendingAllPages, useYearPages } from '@/features/catalog/hooks';
-import { useGenrePages } from '@/features/genres/hooks';
+import { useCatalogSearch, useSuggestionPages } from '@/features/catalog/hooks';
 import { GENRES } from '@/features/genres/catalog';
 import { enrichTitleRefsWithImdb } from '@/features/creator/imdbEnrichment';
 import { titleRefFromMedia } from '@/features/creator/titleRefs';
 import { creatorTemplate } from '@/features/creator/templates';
 import { formatMaxSlides } from '@/features/creator/validation';
 import { creatorTitleKey, type CreatorFormat, type CreatorTemplateId, type CreatorTitleRef } from '@/domain/models/creator';
-import type { PagedCatalog } from '@/domain/repositories/CatalogRepository';
-import type { CatalogMedia } from '@/domain/models/media';
+import type { PagedCatalog, SuggestionIndustry, SuggestionKind, SuggestionSource } from '@/domain/repositories/CatalogRepository';
 import { useCustomList, useCustomLists, useWatchlist } from '@/features/watchState/hooks';
 import { triggerLightHaptic } from '@/lib/haptics';
 import { colors, radius, spacing, typography } from '@/theme';
 
 /**
  * Multi-select title picker for the editor. It opens on suggestions, already
- * filled — popular, top rated, flops, new, by year, by genre — so picking a
- * title never starts with a blank search box. Search, the watchlist, and
+ * filled — a ranking source (popular / top rated / flops / new / upcoming)
+ * narrowed by combinable filters (type, industry, year, genre) — so picking
+ * a title never starts with a blank search box. Search, the watchlist, and
  * custom lists remain one tab away. Everything is one of the app's existing
  * cached reads; selections are snapshotted into `CreatorTitleRef`s on confirm
  * (with a real IMDb score attached when a match exists) so drafts stay fully
@@ -39,13 +38,25 @@ const TABS: { value: PickerTab; label: string }[] = [
   { value: 'lists', label: 'Lists' },
 ];
 
-type SuggestionSource = 'popular' | 'top-rated' | 'flops' | 'new';
-
 const SOURCES: { value: SuggestionSource; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { value: 'popular', label: 'Popular', icon: 'flame-outline' },
   { value: 'top-rated', label: 'Top rated', icon: 'star-outline' },
   { value: 'flops', label: 'Flops', icon: 'thumbs-down-outline' },
   { value: 'new', label: 'New', icon: 'sparkles-outline' },
+  { value: 'upcoming', label: 'Upcoming', icon: 'calendar-outline' },
+];
+
+const KINDS: { value: SuggestionKind; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'movies', label: 'Movies' },
+  { value: 'shows', label: 'Shows' },
+  { value: 'anime', label: 'Anime' },
+];
+
+const INDUSTRIES: { value: SuggestionIndustry; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'hollywood', label: 'Hollywood' },
+  { value: 'bollywood', label: 'Bollywood' },
 ];
 
 const SUGGESTION_COPY: Record<SuggestionSource, { error: string; empty: string }> = {
@@ -53,6 +64,7 @@ const SUGGESTION_COPY: Record<SuggestionSource, { error: string; empty: string }
   'top-rated': { error: 'Couldn’t load top-rated titles. Check your connection and try again.', empty: 'Top-rated titles are unavailable right now.' },
   flops: { error: 'Couldn’t load the flop shelf. Check your connection and try again.', empty: 'The flop shelf is empty right now.' },
   new: { error: 'Couldn’t load new releases. Check your connection and try again.', empty: 'No fresh releases found right now.' },
+  upcoming: { error: 'Couldn’t load upcoming releases. Check your connection and try again.', empty: 'No upcoming releases match these filters.' },
 };
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -73,8 +85,10 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
   const [selected, setSelected] = useState<Map<string, CreatorTitleRef>>(() => new Map());
   const [activeListId, setActiveListId] = useState<string | undefined>(undefined);
   const [source, setSource] = useState<SuggestionSource>('popular');
-  const [focusYear, setFocusYear] = useState<number | undefined>(undefined);
-  const [focusGenreId, setFocusGenreId] = useState<number | undefined>(undefined);
+  const [kind, setKind] = useState<SuggestionKind>('all');
+  const [industry, setIndustry] = useState<SuggestionIndustry>('all');
+  const [year, setYear] = useState<number | undefined>(undefined);
+  const [genreId, setGenreId] = useState<number | undefined>(undefined);
   const [confirming, setConfirming] = useState(false);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const existing = useMemo(() => new Set(existingKeys), [existingKeys]);
@@ -90,26 +104,18 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
     debounceTimer.current = setTimeout(() => setDebouncedQuery(next), 320);
   };
 
-  // Which suggestion rail is showing. A tapped year or genre wins over the
-  // base source chip; tapping the active one again falls back to the chip.
-  const activeSuggestion: SuggestionSource | 'year' | 'genre' =
-    focusGenreId !== undefined ? 'genre' : focusYear !== undefined ? 'year' : source;
   const onSuggestions = tab === 'suggestions';
-  const activeGenre = focusGenreId !== undefined ? GENRES.find((entry) => entry.id === focusGenreId) : undefined;
+  const filters = useMemo(() => ({ source, kind, industry, year, genreId }), [source, kind, industry, year, genreId]);
 
-  // Only the active tab's (and active rail's) sources run; every other hook is
-  // disabled. Paged rails load more on scroll; all of them are abortable via
+  // Only the active tab's sources run; every other hook is disabled. The
+  // suggestion rail is one paged query carrying the whole filter set, so any
+  // combination stays cached and instantly restorable. It is abortable via
   // the query signal when the modal closes.
   const search = useCatalogSearch(debouncedQuery, 'all', tab === 'search');
   const watchlist = useWatchlist(tab === 'watchlist');
   const lists = useCustomLists(tab === 'lists');
   const listDetail = useCustomList(activeListId, tab === 'lists');
-  const popular = useTrendingAllPages(onSuggestions && activeSuggestion === 'popular');
-  const topRated = useTopRatedTitlesPages(onSuggestions && activeSuggestion === 'top-rated');
-  const flops = useFlopPages(onSuggestions && activeSuggestion === 'flops');
-  const fresh = useRecentlyReleased(onSuggestions && activeSuggestion === 'new');
-  const yearPages = useYearPages(focusYear ?? CURRENT_YEAR, onSuggestions && activeSuggestion === 'year');
-  const genrePages = useGenrePages(focusGenreId ?? GENRES[0].id, 'all', onSuggestions && activeSuggestion === 'genre');
+  const suggestions = useSuggestionPages(filters, onSuggestions);
 
   const toggle = (ref: CreatorTitleRef) => {
     const key = creatorTitleKey(ref);
@@ -122,24 +128,20 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
     });
   };
 
+  // Copy adapts to how narrow the rail is: a filtered rail that comes back
+  // empty points at the filters instead of claiming the source itself is empty.
   const suggestionCopy = useMemo(() => {
-    if (activeSuggestion === 'year' && focusYear) return { error: `Couldn’t load ${focusYear}. Check your connection and try again.`, empty: `Nothing from ${focusYear} yet — try another year.` };
-    if (activeSuggestion === 'genre' && activeGenre) return { error: `Couldn’t load ${activeGenre.name}. Check your connection and try again.`, empty: `Nothing found in ${activeGenre.name}.` };
-    return SUGGESTION_COPY[activeSuggestion as SuggestionSource] ?? SUGGESTION_COPY.popular;
-  }, [activeSuggestion, activeGenre, focusYear]);
+    const base = SUGGESTION_COPY[source];
+    const narrowed = kind !== 'all' || industry !== 'all' || year !== undefined || genreId !== undefined;
+    return narrowed
+      ? { error: base.error, empty: 'Nothing matches these filters — clear one and try again.' }
+      : base;
+  }, [source, kind, industry, year, genreId]);
 
   const pickerSource = useMemo<PickerSource>(() => {
-    if (tab === 'suggestions') {
-      if (activeSuggestion === 'new') return plainSource(fresh, suggestionCopy);
-      const paged = activeSuggestion === 'popular' ? popular
-        : activeSuggestion === 'top-rated' ? topRated
-        : activeSuggestion === 'flops' ? flops
-        : activeSuggestion === 'year' ? yearPages
-        : genrePages;
-      return pagedSource(paged, suggestionCopy);
-    }
+    if (tab === 'suggestions') return pagedSource(suggestions, suggestionCopy);
     return resolveLocalSource({ tab, query, debouncedQuery, search, watchlist, lists, listDetail, activeListId });
-  }, [tab, activeSuggestion, popular, topRated, flops, yearPages, genrePages, fresh, suggestionCopy, query, debouncedQuery, search, watchlist, lists, listDetail, activeListId]);
+  }, [tab, suggestions, suggestionCopy, query, debouncedQuery, search, watchlist, lists, listDetail, activeListId]);
 
   const selectedRefs = useMemo(() => [...selected.values()], [selected]);
 
@@ -173,14 +175,14 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
           <View style={styles.rails}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.railContent} keyboardShouldPersistTaps="handled">
               {SOURCES.map((entry) => {
-                const active = !focusYear && focusGenreId === undefined && source === entry.value;
+                const active = source === entry.value;
                 return (
                   <Pressable
                     key={entry.value}
                     accessibilityRole="tab"
                     accessibilityState={{ selected: active }}
                     accessibilityLabel={`Suggested: ${entry.label}`}
-                    onPress={() => { triggerLightHaptic(); setSource(entry.value); setFocusYear(undefined); setFocusGenreId(undefined); }}
+                    onPress={() => { triggerLightHaptic(); setSource(entry.value); }}
                     style={[styles.listChip, active && styles.listChipActive]}
                   >
                     <Ionicons name={entry.icon} size={13} color={active ? colors.accent : colors.textMuted} />
@@ -190,37 +192,81 @@ export function TitlePickerModal({ templateId, format, existingKeys, onClose, on
               })}
             </ScrollView>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.railContent} keyboardShouldPersistTaps="handled">
-              <AppText variant="caption" muted style={styles.railLabel}>YEAR</AppText>
-              {YEARS.map((year) => {
-                const active = focusYear === year;
+              <AppText variant="caption" muted style={styles.railLabel}>TYPE</AppText>
+              {KINDS.map((entry) => {
+                const active = kind === entry.value;
                 return (
                   <Pressable
-                    key={year}
+                    key={entry.value}
                     accessibilityRole="tab"
                     accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Year ${year}`}
-                    onPress={() => { triggerLightHaptic(); setFocusGenreId(undefined); setFocusYear(active ? undefined : year); }}
+                    accessibilityLabel={`Type: ${entry.label}`}
+                    onPress={() => {
+                      triggerLightHaptic();
+                      setKind(entry.value);
+                      // Anime carries no Hollywood/Bollywood split — the
+                      // industry filter resets visibly so nothing stays
+                      // hidden behind a disabled chip.
+                      if (entry.value === 'anime') setIndustry('all');
+                    }}
                     style={[styles.yearChip, active && styles.listChipActive]}
                   >
-                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{year}</AppText>
+                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{entry.label}</AppText>
+                  </Pressable>
+                );
+              })}
+              <View style={styles.railDivider} />
+              <AppText variant="caption" muted style={styles.railLabel}>INDUSTRY</AppText>
+              {INDUSTRIES.map((entry) => {
+                const disabled = kind === 'anime';
+                const active = !disabled && industry === entry.value;
+                return (
+                  <Pressable
+                    key={entry.value}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active, disabled }}
+                    accessibilityLabel={`Industry: ${entry.label}${disabled ? ', unavailable for anime' : ''}`}
+                    disabled={disabled}
+                    onPress={() => { triggerLightHaptic(); setIndustry(entry.value); }}
+                    style={[styles.yearChip, active && styles.listChipActive, disabled && styles.chipDisabled]}
+                  >
+                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{entry.label}</AppText>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.railContent} keyboardShouldPersistTaps="handled">
+              <AppText variant="caption" muted style={styles.railLabel}>YEAR</AppText>
+              {[{ value: undefined as number | undefined, label: 'Any' }, ...YEARS.map((value) => ({ value: value as number | undefined, label: String(value) }))].map((entry) => {
+                const active = year === entry.value;
+                return (
+                  <Pressable
+                    key={entry.label}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={entry.value === undefined ? 'Year: any' : `Year ${entry.value}`}
+                    onPress={() => { triggerLightHaptic(); setYear(active && entry.value !== undefined ? undefined : entry.value); }}
+                    style={[styles.yearChip, active && styles.listChipActive]}
+                  >
+                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{entry.label}</AppText>
                   </Pressable>
                 );
               })}
             </ScrollView>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.railContent} keyboardShouldPersistTaps="handled">
               <AppText variant="caption" muted style={styles.railLabel}>GENRE</AppText>
-              {GENRES.map((genre) => {
-                const active = focusGenreId === genre.id;
+              {[{ value: undefined as number | undefined, label: 'Any' }, ...GENRES.map((genre) => ({ value: genre.id as number | undefined, label: genre.name }))].map((entry) => {
+                const active = genreId === entry.value;
                 return (
                   <Pressable
-                    key={genre.id}
+                    key={entry.label}
                     accessibilityRole="tab"
                     accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Genre ${genre.name}`}
-                    onPress={() => { triggerLightHaptic(); setFocusYear(undefined); setFocusGenreId(active ? undefined : genre.id); }}
+                    accessibilityLabel={entry.value === undefined ? 'Genre: any' : `Genre ${entry.label}`}
+                    onPress={() => { triggerLightHaptic(); setGenreId(active && entry.value !== undefined ? undefined : entry.value); }}
                     style={[styles.yearChip, active && styles.listChipActive]}
                   >
-                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{genre.name}</AppText>
+                    <AppText variant="caption" color={active ? colors.textPrimary : colors.textSecondary}>{entry.label}</AppText>
                   </Pressable>
                 );
               })}
@@ -307,13 +353,6 @@ interface PagedQuery {
   fetchNextPage: () => unknown;
 }
 
-interface PlainQuery {
-  data?: readonly CatalogMedia[];
-  isLoading: boolean;
-  isError: boolean;
-  refetch: () => unknown;
-}
-
 /** Flattens paged rows, dropping repeats that appeared on an earlier page. */
 function refsFromPages(pages: readonly PagedCatalog[]): CreatorTitleRef[] {
   const seen = new Set<string>();
@@ -341,14 +380,6 @@ function pagedSource(query: PagedQuery, copy: { error: string; empty: string }):
     loadingMore: query.isFetchingNextPage,
     onLoadMore: query.hasNextPage && !query.isFetchingNextPage ? () => void query.fetchNextPage() : undefined,
   };
-}
-
-function plainSource(query: PlainQuery, copy: { error: string; empty: string }): PickerSource {
-  const items = query.data ?? [];
-  if (!items.length && query.isLoading) return { kind: 'loading', rows: [] };
-  if (!items.length && query.isError) return { kind: 'error', message: copy.error, retry: () => void query.refetch(), rows: [] };
-  const rows = refsFromPages([{ items: [...items], page: 1, totalPages: 1 }]);
-  return rows.length ? { kind: 'rows', rows } : { kind: 'empty', message: copy.empty, rows: [] };
 }
 
 function resolveLocalSource(input: {
@@ -475,6 +506,8 @@ const styles = StyleSheet.create({
   railContent: { paddingHorizontal: spacing.xl, gap: spacing.sm, alignItems: 'center' },
   railLabel: { letterSpacing: 1, marginRight: spacing.xs },
   yearChip: { paddingHorizontal: spacing.md, paddingVertical: 5, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  chipDisabled: { opacity: 0.4 },
+  railDivider: { width: 1, alignSelf: 'stretch', marginVertical: 3, backgroundColor: colors.border, marginHorizontal: 2 },
   searchWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.xl, marginBottom: spacing.sm, paddingHorizontal: spacing.lg, minHeight: 48, borderRadius: radius.medium, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   searchInput: { flex: 1, color: colors.textPrimary, ...typography.body, fontSize: 15 },
   listChips: { flexGrow: 0, marginBottom: spacing.sm },

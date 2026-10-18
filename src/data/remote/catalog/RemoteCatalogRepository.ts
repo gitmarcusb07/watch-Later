@@ -1,6 +1,6 @@
 import { CatalogError } from '@/domain/errors/CatalogError';
 import type { CatalogFilter, CatalogMedia, CatalogSeason, CatalogSearchResult, MediaEpisode, MediaIdentity, MediaProvider, SeasonSummary, WatchProviderGroup } from '@/domain/models/media';
-import type { CatalogRepository as CatalogRepositoryContract, GenrePageKind, PagedCatalog } from '@/domain/repositories/CatalogRepository';
+import type { CatalogRepository as CatalogRepositoryContract, GenrePageKind, PagedCatalog, SuggestionFilters, SuggestionSource } from '@/domain/repositories/CatalogRepository';
 import { imageUrl, getTmdbApiKey } from '@/data/remote/catalog/config';
 import { normalizeSearchText, rankSearchResults, type SearchPopularity } from '@/data/remote/catalog/searchRank';
 import { deviceRegion } from '@/data/remote/catalog/region';
@@ -12,10 +12,9 @@ import { jikanClient } from '@/data/remote/jikan/client';
 import { kitsuClient } from '@/data/remote/kitsu/client';
 import { mapTmdbMovie, mapTmdbSeason, mapTmdbTv } from '@/data/remote/tmdb/mappers';
 import { tmdbClient } from '@/data/remote/tmdb/client';
-import type { TmdbSeasonDto } from '@/data/remote/tmdb/types';
+import type { TmdbMovieDto, TmdbSeasonDto, TmdbTvDto } from '@/data/remote/tmdb/types';
 import { tvdbClient } from '@/data/remote/tvdb/client';
 import {
-  TVDB_ANIME_GENRE_ID,
   isAnimeGenres,
   mapTvdbEpisodeDto,
   mapTvdbFilterMovie,
@@ -49,13 +48,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 const SEARCH_POPULARITY_TIMEOUT_MS = 3_000;
 
 /**
- * Popularity for the typed query from TMDB's own search, keyed by normalized
- * title (TVDB ids differ, so titles are the join). Pure ranking signal — TVDB
- * stays the only source of results. Any failure (offline, rate limit, missing
- * key, timeout) yields an empty map and ranking falls back to text match.
+ * One TMDb search serves two jobs: the popularity signal that ranks the
+ * merged results (TVDB ids differ, so titles are the join), and the English
+ * rows that fill gaps TVDB cannot serve — upcoming releases in particular,
+ * which TVDB's search often has no record of at all. Any failure (offline,
+ * rate limit, missing key, timeout) yields empty results and ranking falls
+ * back to text match.
  */
-async function searchQueryPopularity(term: string, signal?: AbortSignal): Promise<SearchPopularity> {
-  if (!getTmdbApiKey()) return new Map();
+async function fetchTmdbSearchSignal(term: string, signal?: AbortSignal): Promise<{ popularity: SearchPopularity; movies: TmdbMovieDto[]; tv: TmdbTvDto[] }> {
+  if (!getTmdbApiKey()) return { popularity: new Map(), movies: [], tv: [] };
   try {
     const [movies, tv] = await withTimeout(Promise.all([
       tmdbClient.searchMovies(term, signal),
@@ -69,10 +70,32 @@ async function searchQueryPopularity(term: string, signal?: AbortSignal): Promis
     };
     for (const dto of movies.results ?? []) record(dto.title, dto.popularity);
     for (const dto of tv.results ?? []) record(dto.name, dto.popularity);
-    return popularity;
+    return { popularity, movies: movies.results ?? [], tv: tv.results ?? [] };
   } catch {
-    return new Map();
+    return { popularity: new Map(), movies: [], tv: [] };
   }
+}
+
+/**
+ * True when a title carries at least one Latin letter. TVDB serves its
+ * untranslated rows with native-script names (Devanagari, Tamil, Japanese);
+ * the app's UI is English-first and TMDb/AniList carry the English title for
+ * the same titles, so native-only names are dropped rather than shown.
+ */
+export function hasLatinTitle(title: string): boolean {
+  return /[A-Za-z]/.test(title);
+}
+
+/** Local YYYY-MM-DD stamp, matching how providers report release dates. */
+function isoDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/** Today shifted by whole days (local calendar; setDate keeps DST intact). */
+function daysFromToday(days: number): Date {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date;
 }
 
 function toHitCandidate(dto: { id: number; title?: string; name?: string; poster_path?: string | null; release_date?: string; first_air_date?: string; popularity?: number | null; vote_average?: number | null; vote_count?: number | null }, media: HitsMediaType): HitCandidate {
@@ -224,6 +247,11 @@ export function releasedOnly(items: readonly CatalogMedia[]): CatalogMedia[] {
   return items.filter((item) => !isUpcomingMedia(item));
 }
 
+/** Source-appropriate gate: `upcoming` keeps only future titles, every other source keeps released ones. */
+function selectSuggestionItems(items: CatalogMedia[], source: SuggestionSource): CatalogMedia[] {
+  return source === 'upcoming' ? items.filter((item) => isUpcomingMedia(item)) : releasedOnly(items);
+}
+
 function orderUpcomingByDate(items: readonly CatalogMedia[], limit = 20): CatalogMedia[] {
   const seen = new Set<string>();
   return [...items]
@@ -259,33 +287,73 @@ const HINDI_SHOW_MIN_VOTES = 45;
 const FLOP_MIN_VOTES = 500;
 /** Best-of-year floor: enough votes that a score reflects an audience. */
 const YEAR_MIN_VOTES = 200;
+/**
+ * Flop score ceilings (0–10). TMDb show scores run about a point above
+ * movie scores, so the two rails need separate caps — a movie-style cap
+ * would leave the show rail nearly empty. Probe-confirmed: movie flops sit
+ * ~2.9–3.9, show flops ~4.5–5.5.
+ */
+const FLOP_MOVIE_MAX_RATING = 4.8;
+const FLOP_SHOW_MAX_RATING = 5.6;
+/** Show vote floor: TMDb show vote counts run smaller than movie counts. */
+const FLOP_SHOW_MIN_VOTES = 400;
+/**
+ * Hindi catalogs are a fraction of TMDb's English volume, so the flop vote
+ * floors scale down — probe-verified: a 500-vote floor leaves zero Hindi
+ * movie flops while 80 keeps real, known misses (Race 3, Tees Maar Khan).
+ */
+const FLOP_HINDI_MIN_VOTES = 80;
+const FLOP_HINDI_SHOW_MIN_VOTES = 40;
+/** AniList popularity floor for flop anime: known-but-bad, not obscure. */
+const FLOP_ANIME_MIN_POPULARITY = 5_000;
+/** "New" rail window — the same rolling quarter the home shelf uses. */
+const NEW_RELEASE_WINDOW_DAYS = 90;
 
 export class RemoteCatalogRepository implements CatalogRepositoryContract {
   async search(query: string, filter: CatalogFilter, signal?: AbortSignal): Promise<CatalogSearchResult> {
     const term = query.trim();
     if (!term) return { items: [], unavailableProviders: [] };
-    // TVDB is the single catalog source: one dataset for movies, shows, and
-    // anime (anime = series carrying the Anime genre).
+    // A Latin query gets Latin-only TVDB rows back: TVDB answers with
+    // native-script names for untranslated entries (e.g. रामायण), and the
+    // TMDb join below supplies the English title instead. A non-Latin query
+    // keeps every row — the user typed that script on purpose.
+    const latinQuery = /[A-Za-z]/.test(term);
+    const keepTitle = (item: CatalogMedia | null): item is CatalogMedia => item !== null && (!latinQuery || hasLatinTitle(item.title));
+    // TVDB is the catalog source of record: one dataset for movies, shows,
+    // and anime (anime = series carrying the Anime genre).
     const tasks: { provider: MediaProvider; load: () => Promise<CatalogMedia[]> }[] = [];
-    if (filter === 'all' || filter === 'movies') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'movie', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => item !== null) });
-    if (filter === 'all' || filter === 'series') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => item !== null && item.mediaType === 'series') });
-    if (filter === 'all' || filter === 'anime') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => item !== null && item.mediaType === 'anime') });
-    // Ranking signal fetched in parallel; TVDB stays the only results source.
-    const popularity = searchQueryPopularity(term, signal);
+    if (filter === 'all' || filter === 'movies') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'movie', signal)).map(mapTvdbSearchItem).filter(keepTitle) });
+    if (filter === 'all' || filter === 'series') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'series') });
+    if (filter === 'all' || filter === 'anime') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'anime') });
+    // The TMDb search runs in parallel with TVDB: it ranks the merged list,
+    // and its rows fill gaps TVDB has no record of (upcoming releases).
+    const tmdbSignal = fetchTmdbSearchSignal(term, signal);
     const settled = await Promise.allSettled(tasks.map((task) => task.load()));
     if (signal?.aborted) throw settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
     const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
     const unavailableProviders = [...new Set(settled.flatMap((result, index) => result.status === 'rejected' ? [tasks[index].provider] : []))];
-    if (!fulfilled.length && settled.some((result) => result.status === 'rejected')) {
+    const fallback = await tmdbSignal;
+    const tvdbItems = fulfilled.flat();
+    const tvdbTitles = new Set(tvdbItems.map((item) => normalizeTitle(item.title)));
+    // TMDb rows only fill gaps: a title TVDB already matched never appears
+    // twice (dedupe is by normalized title — provider ids never join).
+    const gapOnly = (items: CatalogMedia[]) => items.filter((item) => !tvdbTitles.has(normalizeTitle(item.title)));
+    const groups: CatalogMedia[][] = [tvdbItems];
+    if (filter === 'all' || filter === 'movies') groups.push(gapOnly(fallback.movies.map(mapTmdbMovie)));
+    if (filter === 'all' || filter === 'series') groups.push(gapOnly(fallback.tv.map(mapTmdbTv)));
+    const merged = mergeCatalogResults(groups);
+    if (!merged.length) {
+      // Nothing to show and a TVDB task failed: the search itself failed.
       const reason = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
-      if (reason instanceof Error) throw reason;
-      throw new CatalogError(tasks[0].provider, 'network');
+      if (settled.some((result) => result.status === 'rejected')) {
+        if (reason instanceof Error) throw reason;
+        throw new CatalogError(tasks[0].provider, 'network');
+      }
+      return { items: [], unavailableProviders };
     }
-    const merged = mergeCatalogResults(fulfilled);
-    if (!merged.length) return { items: [], unavailableProviders };
-    // The exact/popular match the user typed lands first; TVDB's own order
+    // The exact/popular match the user typed lands first; provider order
     // only breaks full ties, so the top title never needs scrolling to find.
-    return { items: rankSearchResults(merged, term, await popularity), unavailableProviders };
+    return { items: rankSearchResults(merged, term, fallback.popularity), unavailableProviders };
   }
 
   async getMedia(identity: MediaIdentity, signal?: AbortSignal): Promise<CatalogMedia> {
@@ -566,8 +634,8 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
 
   async getTrending(signal?: AbortSignal): Promise<CatalogMedia[]> {
     const settled = await Promise.allSettled([
-      tvdbClient.filterMovies({ page: 0 }, signal).then((response) => (response.data ?? []).map(mapTvdbFilterMovie).filter((item): item is CatalogMedia => item !== null)),
-      tvdbClient.filterSeries({ page: 0 }, signal).then((response) => (response.data ?? []).map((item) => mapTvdbFilterSeries(item)).filter((item): item is CatalogMedia => item !== null)),
+      tvdbClient.filterMovies({ page: 0 }, signal).then((response) => (response.data ?? []).map(mapTvdbFilterMovie).filter((item): item is CatalogMedia => item !== null && hasLatinTitle(item.title))),
+      tvdbClient.filterSeries({ page: 0 }, signal).then((response) => (response.data ?? []).map((item) => mapTvdbFilterSeries(item)).filter((item): item is CatalogMedia => item !== null && hasLatinTitle(item.title))),
     ]);
     if (signal?.aborted) throw settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
     const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
@@ -620,8 +688,8 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
    */
   async getTopRated(signal?: AbortSignal): Promise<CatalogMedia[]> {
     const settled = await Promise.allSettled([
-      tvdbClient.filterMovies({ page: 0 }, signal).then((response) => (response.data ?? []).map(mapTvdbFilterMovie).filter((item): item is CatalogMedia => item !== null)),
-      tvdbClient.filterSeries({ page: 0 }, signal).then((response) => (response.data ?? []).map((item) => mapTvdbFilterSeries(item)).filter((item): item is CatalogMedia => item !== null)),
+      tvdbClient.filterMovies({ page: 0 }, signal).then((response) => (response.data ?? []).map(mapTvdbFilterMovie).filter((item): item is CatalogMedia => item !== null && hasLatinTitle(item.title))),
+      tvdbClient.filterSeries({ page: 0 }, signal).then((response) => (response.data ?? []).map((item) => mapTvdbFilterSeries(item)).filter((item): item is CatalogMedia => item !== null && hasLatinTitle(item.title))),
     ]);
     if (signal?.aborted) throw settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
     const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
@@ -642,28 +710,29 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
       .slice(0, 100);
   }
 
+  /**
+   * Upcoming releases for the home screen and creator seeds: TMDb's
+   * theatrical and premiere slates (US + IN + device region) plus AniList's
+   * unreleased anime, merged and ordered oldest first. TMDb and AniList
+   * carry English titles and full release dates, so every row shows a real
+   * day — the old TVDB filter source reported native-script names and
+   * year-only dates ("2026") that could never render a weekday.
+   */
   async getUpcoming(signal?: AbortSignal): Promise<CatalogMedia[]> {
-    const year = new Date().getFullYear();
+    const region = deviceRegion();
     const settled = await Promise.allSettled([
-      Promise.all([tvdbClient.filterMovies({ page: 0, year }, signal), tvdbClient.filterMovies({ page: 0, year: year + 1 }, signal)])
-        .then((pages) => pages.flatMap((response) => (response.data ?? []).map(mapTvdbFilterMovie).filter((item): item is CatalogMedia => item !== null))),
-      Promise.all([tvdbClient.filterSeries({ page: 0, year }, signal), tvdbClient.filterSeries({ page: 0, year: year + 1 }, signal)])
-        .then((pages) => pages.flatMap((response) => (response.data ?? []).map((item) => mapTvdbFilterSeries(item)).filter((item): item is CatalogMedia => item !== null))),
-      Promise.all([tvdbClient.filterSeries({ page: 0, year, genre: TVDB_ANIME_GENRE_ID }, signal), tvdbClient.filterSeries({ page: 0, year: year + 1, genre: TVDB_ANIME_GENRE_ID }, signal)])
-        .then((pages) => pages.flatMap((response) => (response.data ?? []).map((item) => mapTvdbFilterSeries(item, 'anime')).filter((item): item is CatalogMedia => item !== null))),
+      this.getUpcomingMoviesPage(1, region, signal),
+      this.getUpcomingSeriesPage(1, region, signal),
+      this.getUpcomingAnimePage(1, signal),
     ]);
     if (signal?.aborted) throw settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
-    const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+    const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value.items] : []);
     if (!fulfilled.length) {
       const reason = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
       if (reason instanceof Error) throw reason;
-      throw new CatalogError('tvdb', 'network');
+      throw new CatalogError('tmdb', 'network');
     }
-    const upcoming = fulfilled.flat().filter((media) => isUpcomingMedia(media));
-    // If providers return no future-dated items (e.g. mocked data), fall back to
-    // the full pool so the section never looks broken while staying honest.
-    const pool = upcoming.length ? upcoming : fulfilled.flat();
-    return orderUpcomingByDate(pool);
+    return orderUpcomingByDate(fulfilled.flat().filter((media) => isUpcomingMedia(media)));
   }
 
   /**
@@ -952,7 +1021,10 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
       .filter((item) => {
         if (seen.has(item.id)) return false;
         seen.add(item.id);
-        return isUpcomingMedia(item);
+        // English-first like every shelf: TMDb keeps the original title when
+        // no translation exists, and a carousel has no room for native-script
+        // curiosities.
+        return isUpcomingMedia(item) && hasLatinTitle(item.title);
       })
       .sort((a, b) => (a.releaseDate ?? '9999').localeCompare(b.releaseDate ?? '9999'));
     return {
@@ -986,7 +1058,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
       .filter((item) => {
         if (seen.has(item.id)) return false;
         seen.add(item.id);
-        return isUpcomingMedia(item);
+        return isUpcomingMedia(item) && hasLatinTitle(item.title);
       })
       .sort((a, b) => (a.releaseDate ?? '9999').localeCompare(b.releaseDate ?? '9999'));
     return {
@@ -1002,7 +1074,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     const response = await anilistClient.upcomingAnimePage(safePage, 20, signal);
     const items = response.media
       .map(mapAniListAnime)
-      .filter((item) => isUpcomingMedia(item))
+      .filter((item) => isUpcomingMedia(item) && hasLatinTitle(item.title))
       .sort((a, b) => (a.releaseDate ?? '9999').localeCompare(b.releaseDate ?? '9999'));
     return {
       items,
@@ -1117,73 +1189,156 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
   }
 
   /**
-   * All-time top-rated, mixed. TMDb's own `top_rated` lists are built from
-   * average scores with real vote weight, so the ranking is honest — no local
-   * re-sorting. Hollywood and Bollywood both join so the list never reads as
-   * English-only.
+   * Combined picker suggestions. One ranking source — popular, top rated,
+   * flops, new, or upcoming — narrowed by any mix of kind (movies / shows /
+   * anime), industry (Hollywood = English originals, Bollywood = Hindi
+   * originals), year, and genre. Every slice is built from the same provider
+   * queries the browse shelves use, so a rail can never invent a title or a
+   * score:
+   * - popular: TMDb popularity, released only
+   * - top-rated: TMDb average score with a real vote floor
+   * - flops: worst average score that a real audience still watched
+   * - new: released within the last 90 days, newest first
+   * - upcoming: releases later than today, oldest first
+   * `all` mixes movies, shows, and (page one) anime; `anime` is AniList.
+   * Combinations that can never match (a TV-only genre with kind `shows`, a
+   * past year with `upcoming`) honestly return an empty page.
    */
-  async getTopRatedTitlesPage(page: number, signal?: AbortSignal): Promise<PagedCatalog> {
+  async getSuggestionPage(page: number, filters: SuggestionFilters, signal?: AbortSignal): Promise<PagedCatalog> {
     const safePage = Math.max(1, Math.floor(page) || 1);
-    const [movies, tv] = await Promise.all([
-      tmdbClient.topRatedMovies(safePage, signal),
-      tmdbClient.topRatedTv(safePage, signal),
-    ]);
+    if (filters.kind === 'anime') {
+      const result = await this.animeSuggestionMedia(safePage, filters, signal);
+      return {
+        items: result.items,
+        page: safePage,
+        totalPages: result.lastPage ?? (result.hasNextPage ? safePage + 1 : safePage),
+      };
+    }
     const size = 20;
+    const language = filters.industry === 'hollywood' ? 'en' : filters.industry === 'bollywood' ? 'hi' : undefined;
+    const moviesGenre = filters.genreId !== undefined ? String(filters.genreId) : undefined;
+    const showsGenre = filters.genreId !== undefined ? tvGenreIdsFor(filters.genreId) : undefined;
+    const moviePlan = filters.kind === 'all' || filters.kind === 'movies'
+      ? RemoteCatalogRepository.suggestionTmdbPlan('movie', filters)
+      : null;
+    const showPlan = (filters.kind === 'all' || filters.kind === 'shows') && (filters.genreId === undefined || typeof showsGenre === 'string')
+      ? RemoteCatalogRepository.suggestionTmdbPlan('tv', filters)
+      : null;
+    // Anime joins `all` on page one only — its ranking is a single snapshot —
+    // and only for the unfiltered industry: anime has no Hollywood/Bollywood
+    // split. Genres AniList never tags honestly drop the slice.
+    const animeGenre = filters.genreId !== undefined ? anilistGenreFor(filters.genreId) : undefined;
+    const wantsAnime = filters.kind === 'all' && filters.industry === 'all' && safePage === 1 && animeGenre !== null;
+    const tasks: Promise<{ items: CatalogMedia[]; totalPages: number }>[] = [];
+    if (moviePlan) {
+      tasks.push(tmdbClient.discoverMovies(safePage, {
+        language, withGenres: moviesGenre, sortBy: moviePlan.sortBy,
+        voteCountGte: moviePlan.voteCountGte, voteAverageLte: moviePlan.voteAverageLte,
+        releaseDateGte: moviePlan.from, releaseDateLte: moviePlan.to, primaryReleaseYear: moviePlan.year,
+      }, signal).then((response) => ({
+        items: selectSuggestionItems((response.results ?? []).map(mapTmdbMovie), filters.source),
+        totalPages: response.total_pages ?? 1,
+      })));
+    }
+    if (showPlan) {
+      // Hindi shows are restricted to Indian OTT platforms with real
+      // traction — the same guard the Bollywood shelf uses — so daily
+      // broadcast serials never fill the rail.
+      const hindiShows = language === 'hi';
+      tasks.push(tmdbClient.discoverTv(safePage, {
+        language, withGenres: typeof showsGenre === 'string' ? showsGenre : undefined, sortBy: showPlan.sortBy,
+        voteCountGte: hindiShows ? Math.max(showPlan.voteCountGte ?? 0, HINDI_SHOW_MIN_VOTES) : showPlan.voteCountGte,
+        voteAverageLte: showPlan.voteAverageLte,
+        firstAirDateGte: showPlan.from, firstAirDateLte: showPlan.to, firstAirDateYear: showPlan.year,
+        watchRegion: hindiShows ? 'IN' : undefined,
+        watchProviders: hindiShows ? IN_OTT_TV_PROVIDERS : undefined,
+      }, signal).then((response) => ({
+        items: selectSuggestionItems((response.results ?? []).map(mapTmdbTv), filters.source),
+        totalPages: response.total_pages ?? 1,
+      })));
+    }
+    if (wantsAnime) {
+      tasks.push(this.animeSuggestionMedia(1, filters, signal).then((result) => ({
+        items: result.items.slice(0, size),
+        totalPages: result.lastPage ?? (result.hasNextPage ? 2 : 1),
+      })));
+    }
+    if (!tasks.length) return { items: [], page: safePage, totalPages: safePage };
+    const settled = await Promise.allSettled(tasks);
+    if (signal?.aborted) throw settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
+    const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+    if (!fulfilled.length) {
+      const reason = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
+      if (reason instanceof Error) throw reason;
+      throw new CatalogError('tmdb', 'network');
+    }
     return {
-      items: releasedOnly(interleaveRanked([
-        (movies.results ?? []).slice(0, size).map(mapTmdbMovie),
-        (tv.results ?? []).slice(0, size).map(mapTmdbTv),
-      ], size * 2)),
+      items: interleaveRanked(fulfilled.map((slice) => slice.items), size * 2),
       page: safePage,
-      totalPages: RemoteCatalogRepository.maxPages(Math.max(movies.total_pages ?? 1, tv.total_pages ?? 1)),
+      totalPages: RemoteCatalogRepository.maxPages(Math.max(...fulfilled.map((slice) => slice.totalPages))),
     };
   }
 
   /**
-   * Flops: the worst-rated released titles that still found an audience. The
-   * vote floor (`FLOP_MIN_VOTES`) keeps no-name 0.0 entries out; what remains
-   * is tried-and-missed — the "everyone watched, nobody loved" shelf.
+   * TMDb query plan for one media type. `from`/`to` bound a release-date
+   * window (`new` / `upcoming`), `year` is a primary-release / first-air
+   * year filter, and `null` means the combination can never match (e.g. an
+   * `upcoming` request for a past year).
    */
-  async getFlopsPage(page: number, signal?: AbortSignal): Promise<PagedCatalog> {
-    const safePage = Math.max(1, Math.floor(page) || 1);
-    const [movies, tv] = await Promise.all([
-      tmdbClient.discoverMovies(safePage, { language: 'en', sortBy: 'vote_average.asc', voteCountGte: FLOP_MIN_VOTES }, signal),
-      tmdbClient.discoverTv(safePage, { language: 'en', sortBy: 'vote_average.asc', voteCountGte: FLOP_MIN_VOTES }, signal),
-    ]);
-    const size = 20;
-    return {
-      items: releasedOnly(interleaveRanked([
-        (movies.results ?? []).slice(0, size).map(mapTmdbMovie),
-        (tv.results ?? []).slice(0, size).map(mapTmdbTv),
-      ], size * 2)),
-      page: safePage,
-      totalPages: RemoteCatalogRepository.maxPages(Math.max(movies.total_pages ?? 1, tv.total_pages ?? 1)),
-    };
+  private static suggestionTmdbPlan(kind: 'movie' | 'tv', filters: SuggestionFilters): { sortBy: string; voteCountGte?: number; voteAverageLte?: number; from?: string; to?: string; year?: number } | null {
+    const today = isoDate(new Date());
+    if (filters.source === 'new') {
+      const from = filters.year !== undefined ? `${filters.year}-01-01` : isoDate(daysFromToday(-NEW_RELEASE_WINDOW_DAYS));
+      const rawTo = filters.year !== undefined ? `${filters.year}-12-31` : today;
+      const to = rawTo > today ? today : rawTo;
+      if (from > to) return null;
+      return { sortBy: kind === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc', from, to };
+    }
+    if (filters.source === 'upcoming') {
+      const from = filters.year !== undefined && `${filters.year}-01-01` > today ? `${filters.year}-01-01` : today;
+      const to = filters.year !== undefined ? `${filters.year}-12-31` : undefined;
+      if (to !== undefined && from > to) return null;
+      return { sortBy: kind === 'movie' ? 'primary_release_date.asc' : 'first_air_date.asc', from, to };
+    }
+    if (filters.source === 'top-rated') {
+      return { sortBy: 'vote_average.desc', voteCountGte: YEAR_MIN_VOTES, year: filters.year };
+    }
+    if (filters.source === 'flops') {
+      const hindi = filters.industry === 'bollywood';
+      return kind === 'movie'
+        ? { sortBy: 'vote_average.asc', voteCountGte: hindi ? FLOP_HINDI_MIN_VOTES : FLOP_MIN_VOTES, voteAverageLte: FLOP_MOVIE_MAX_RATING, year: filters.year }
+        : { sortBy: 'vote_average.asc', voteCountGte: hindi ? FLOP_HINDI_SHOW_MIN_VOTES : FLOP_SHOW_MIN_VOTES, voteAverageLte: FLOP_SHOW_MAX_RATING, year: filters.year };
+    }
+    return { sortBy: 'popularity.desc', year: filters.year };
   }
 
-  /**
-   * Best of one calendar year: average score first, with a vote floor so a
-   * single 10/10 vote can never top the year. Hollywood, Bollywood, and TV
-   * all join; unreleased titles are dropped like every other discovery feed.
-   */
-  async getYearPage(page: number, year: number, signal?: AbortSignal): Promise<PagedCatalog> {
-    const safePage = Math.max(1, Math.floor(page) || 1);
-    const safeYear = Number.isSafeInteger(year) ? year : new Date().getFullYear();
-    const [movies, moviesHi, tv] = await Promise.all([
-      tmdbClient.discoverMovies(safePage, { language: 'en', primaryReleaseYear: safeYear, sortBy: 'vote_average.desc', voteCountGte: YEAR_MIN_VOTES }, signal),
-      tmdbClient.discoverMovies(safePage, { language: 'hi', primaryReleaseYear: safeYear, sortBy: 'vote_average.desc', voteCountGte: Math.round(YEAR_MIN_VOTES / 4) }, signal),
-      tmdbClient.discoverTv(safePage, { language: 'en', firstAirDateYear: safeYear, sortBy: 'vote_average.desc', voteCountGte: YEAR_MIN_VOTES }, signal),
-    ]);
-    const size = 20;
-    return {
-      items: releasedOnly(interleaveRanked([
-        (movies.results ?? []).slice(0, size).map(mapTmdbMovie),
-        (tv.results ?? []).slice(0, size).map(mapTmdbTv),
-        (moviesHi.results ?? []).slice(0, size).map(mapTmdbMovie),
-      ], size * 2)),
-      page: safePage,
-      totalPages: RemoteCatalogRepository.maxPages(Math.max(movies.total_pages ?? 1, moviesHi.total_pages ?? 1, tv.total_pages ?? 1)),
-    };
+  /** AniList slice for the suggestion rail (kind `anime`, or page one of `all`). */
+  private async animeSuggestionMedia(page: number, filters: SuggestionFilters, signal?: AbortSignal): Promise<{ items: CatalogMedia[]; hasNextPage: boolean; lastPage?: number }> {
+    const genre = filters.genreId !== undefined ? anilistGenreFor(filters.genreId) : undefined;
+    if (genre === null) return { items: [], hasNextPage: false };
+    const sort = filters.source === 'top-rated' ? ['SCORE_DESC']
+      : filters.source === 'flops' ? ['SCORE']
+      : filters.source === 'new' ? ['START_DATE_DESC']
+      : ['POPULARITY_DESC'];
+    const response = await anilistClient.suggestAnimePage(page, 40, {
+      sort,
+      genre: typeof genre === 'string' && genre !== 'all' ? genre : undefined,
+      seasonYear: filters.year,
+      status: filters.source === 'upcoming' ? 'NOT_YET_RELEASED' : undefined,
+      popularityGreater: filters.source === 'flops' ? FLOP_ANIME_MIN_POPULARITY : undefined,
+    }, signal);
+    const mapped = response.media.map(mapAniListAnime);
+    const today = isoDate(new Date());
+    const items = filters.source === 'new'
+      ? mapped.filter((item) => item.releaseDate !== undefined
+        && item.releaseDate >= (filters.year !== undefined ? `${filters.year}-01-01` : isoDate(daysFromToday(-NEW_RELEASE_WINDOW_DAYS)))
+        && item.releaseDate <= today)
+      : filters.source === 'flops'
+        // AniList sorts unscored titles first when sorting by score
+        // ascending, so a flop must carry a real score to qualify.
+        ? releasedOnly(mapped).filter((item) => item.rating !== undefined)
+        : selectSuggestionItems(mapped, filters.source);
+    return { items, hasNextPage: response.hasNextPage, lastPage: response.lastPage };
   }
 }
 

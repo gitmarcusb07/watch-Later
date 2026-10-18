@@ -36,12 +36,15 @@ export function UpcomingSlide({ slide, palette, showBranding, branding }: { slid
 
 function ReleaseRow({ refItem, slide, palette }: { refItem: CreatorTitleRef; slide: CreatorSlide; palette: CreatorPalette }) {
   const date = splitSlideDate(refItem.releaseDate);
-  const meta = joinMeta([mediaTypeLabel(refItem), rowMeta(refItem, slide, { dateInsteadOfYear: true })]);
+  // The pill carries day + month (and weekday); the meta line carries the
+  // year — a full date the pill could never fit.
+  const meta = joinMeta([mediaTypeLabel(refItem), rowMeta(refItem, slide)]);
   return (
     <View style={styles.row}>
       <View style={[styles.datePill, { backgroundColor: palette.accentSoft }]}>
         {date ? (
           <>
+            {date.weekday ? <SlideText style={[styles.dateWeekday, { color: palette.accent.primary }]} numberOfLines={1}>{date.weekday}</SlideText> : null}
             <SlideText style={[styles.dateTop, { color: palette.accent.primary }]} numberOfLines={1}>{date.top}</SlideText>
             <SlideText style={[styles.dateBottom, { color: palette.accent.primary }]} numberOfLines={1}>{date.bottom}</SlideText>
           </>
@@ -65,8 +68,9 @@ const styles = StyleSheet.create({
   subheading: { fontSize: 11, lineHeight: 14, fontWeight: '500' },
   rows: { flex: 1, gap: 7, justifyContent: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  datePill: { width: 42, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  dateTop: { fontSize: 14, lineHeight: 16, fontWeight: '800' },
+  datePill: { width: 42, height: 48, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  dateWeekday: { fontSize: 7.5, lineHeight: 9, fontWeight: '800', letterSpacing: 1.1, opacity: 0.85 },
+  dateTop: { fontSize: 15, lineHeight: 17, fontWeight: '800' },
   dateBottom: { fontSize: 8, lineHeight: 10, fontWeight: '700', letterSpacing: 1.2 },
   dateTba: { fontSize: 10, lineHeight: 12, fontWeight: '700', letterSpacing: 0.6 },
   poster: { width: 33, height: 49.5 },

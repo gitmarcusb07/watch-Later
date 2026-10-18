@@ -273,6 +273,39 @@ describe('catalog request and provider clients', () => {
     expect(searchMovie).not.toHaveBeenCalled();
   });
 
+  it('fills search with TMDb English titles and drops native-script TVDB rows for Latin queries', async () => {
+    process.env.EXPO_PUBLIC_TMDB_API_KEY = 'test-key';
+    const repo = new RemoteCatalogRepository();
+    jest.spyOn(tvdbClient, 'search').mockImplementation(async (_query, type) => (
+      type === 'movie'
+        ? [{
+          objectID: 'movie-77', type: 'movie', tvdb_id: '77', name: 'रामायण', overview: 'Story',
+          image_url: 'https://artworks.thetvdb.com/banners/v4/movie/77/posters/x.jpg', year: '2026',
+          genres: ['Drama'], status: 'Announced', primary_language: 'hin',
+        }]
+        : []
+    ));
+    jest.spyOn(tmdbClient, 'searchMovies').mockResolvedValue({
+      results: [{ id: 11, title: 'Ramayana: Rise of a Legend', release_date: '2026-11-05', popularity: 80 }],
+    } as never);
+    jest.spyOn(tmdbClient, 'searchTv').mockResolvedValue({ results: [] } as never);
+    const result = await repo.search('ramayana', 'all');
+    // The Devanagari TVDB row is dropped for a Latin query; TMDb supplies
+    // the same title in English with its full release date.
+    expect(result.items).toEqual([expect.objectContaining({ title: 'Ramayana: Rise of a Legend', provider: 'tmdb', releaseDate: '2026-11-05' })]);
+  });
+
+  it('makes upcoming TMDb titles searchable even when TVDB has no record', async () => {
+    process.env.EXPO_PUBLIC_TMDB_API_KEY = 'test-key';
+    jest.spyOn(tvdbClient, 'search').mockResolvedValue([] as never);
+    jest.spyOn(tmdbClient, 'searchMovies').mockResolvedValue({
+      results: [{ id: 99, title: 'Brand New Day', release_date: '2026-07-29', popularity: 60 }],
+    } as never);
+    jest.spyOn(tmdbClient, 'searchTv').mockResolvedValue({ results: [] } as never);
+    const result = await new RemoteCatalogRepository().search('brand new day', 'all');
+    expect(result.items.map((item) => item.title)).toEqual(['Brand New Day']);
+  });
+
   it('lists popular anime from AniList with English titles, not TVDB Japanese names', async () => {
     const dto = {
       ...animeDto,

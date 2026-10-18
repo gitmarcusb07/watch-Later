@@ -19,7 +19,7 @@ import { renderSlideTemplate } from './templates';
  * memoization survives edits to other slides: an untouched slide keeps its
  * identity and skips re-rendering.
  */
-export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId, theme, accentId, showBranding, branding = CREATOR_DEFAULT_BRANDING, slide, width = SLIDE_BASE_WIDTH, radius = 0 }: {
+export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId, theme, accentId, showBranding, branding = CREATOR_DEFAULT_BRANDING, slide, width = SLIDE_BASE_WIDTH, radius = 0, rankOffset = 0 }: {
   templateId: CreatorTemplateId;
   theme: CreatorTheme;
   accentId: CreatorAccentId;
@@ -28,6 +28,8 @@ export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId,
   slide: CreatorSlide;
   width?: number;
   radius?: number;
+  /** Ranks consumed by earlier slides in a continuous numbered run (see `slideRankOffset`). */
+  rankOffset?: number;
 }) {
   const height = width * (SLIDE_BASE_HEIGHT / SLIDE_BASE_WIDTH);
   const palette = creatorPalette(theme, accentId);
@@ -49,7 +51,7 @@ export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId,
           pointerEvents="none"
         />
         <View style={[styles.ring, { borderColor: palette.surfaceBorder }]} pointerEvents="none" />
-        {renderSlideTemplate(slide.layout ?? templateId, slide, palette, showBranding, branding)}
+        {renderSlideTemplate(slide.layout ?? templateId, slide, palette, showBranding, branding, rankOffset)}
       </View>
     </View>
   );

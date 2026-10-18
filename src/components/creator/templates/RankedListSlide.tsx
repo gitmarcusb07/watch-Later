@@ -7,13 +7,16 @@ import { rowMeta } from '@/features/creator/slideText';
 /**
  * Ranked recommendation list (max five tall rows). Rank markers are the only
  * ordering anywhere in the studio, so a ranked five stays instantly readable
- * on the 4:5 canvas.
+ * on the 4:5 canvas. A carousel of ranked slides numbers continuously:
+ * `rankOffset` carries the ranks consumed by earlier slides (07–11, not a
+ * restart at 01).
  */
-export function RankedListSlide({ slide, palette, showBranding, branding }: {
+export function RankedListSlide({ slide, palette, showBranding, branding, rankOffset = 0 }: {
   slide: CreatorSlide;
   palette: CreatorPalette;
   showBranding: boolean;
   branding: CreatorBranding;
+  rankOffset?: number;
 }) {
   const refs = slide.titleRefs.slice(0, 5);
   const subtitle = slide.subtitle.trim() || (refs.length ? `${refs.length} picks, ranked` : '');
@@ -30,7 +33,7 @@ export function RankedListSlide({ slide, palette, showBranding, branding }: {
       ) : (
         <View style={styles.rows}>
           {refs.map((ref, index) => (
-            <TallRow key={`${ref.provider}:${ref.mediaType}:${ref.providerId}`} rank={index + 1} refItem={ref} slide={slide} palette={palette} />
+            <TallRow key={`${ref.provider}:${ref.mediaType}:${ref.providerId}`} rank={rankOffset + index + 1} refItem={ref} slide={slide} palette={palette} />
           ))}
         </View>
       )}

@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import type { CatalogFilter, CatalogMedia, CatalogSeason, MediaIdentity, SeasonSummary } from '@/domain/models/media';
-import type { PagedCatalog } from '@/domain/repositories/CatalogRepository';
+import type { PagedCatalog, SuggestionFilters } from '@/domain/repositories/CatalogRepository';
 import { catalogRepository } from '@/data/remote/catalog/RemoteCatalogRepository';
 import { deviceRegion } from '@/data/remote/catalog/region';
 import { parseMediaRouteId } from '@/features/catalog/mediaIdentity';
@@ -256,20 +256,18 @@ export function useUpcomingMoviesPages(enabled = true) {
 }
 
 /**
- * Creator picker rails: rating-first discovery feeds. Keys live under
- * `catalog/picker` so they never collide with browse shelves, and stay
- * cached across picker sessions.
+ * Creator picker suggestions: one paged query carrying the full filter set
+ * (source × kind × industry × year × genre). The key carries every filter,
+ * so each combination stays cached and instantly restorable when the user
+ * flips back to it. Keys live under `catalog/picker` so they never collide
+ * with browse shelves.
  */
-export function useTopRatedTitlesPages(enabled = true) {
-  return useInfiniteCatalog(['catalog', 'picker', 'top-rated'], (page, signal) => catalogRepository.getTopRatedTitlesPage(page, signal), enabled);
-}
-
-export function useFlopPages(enabled = true) {
-  return useInfiniteCatalog(['catalog', 'picker', 'flops'], (page, signal) => catalogRepository.getFlopsPage(page, signal), enabled);
-}
-
-export function useYearPages(year: number, enabled = true) {
-  return useInfiniteCatalog(['catalog', 'picker', 'year', year], (page, signal) => catalogRepository.getYearPage(page, year, signal), enabled);
+export function useSuggestionPages(filters: SuggestionFilters, enabled = true) {
+  return useInfiniteCatalog(
+    ['catalog', 'picker', filters.source, filters.kind, filters.industry, filters.year ?? 'all', filters.genreId ?? 'all'],
+    (page, signal) => catalogRepository.getSuggestionPage(page, filters, signal),
+    enabled,
+  );
 }
 
 export function useUpcomingSeriesPages(enabled = true) {

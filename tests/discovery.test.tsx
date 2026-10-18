@@ -175,19 +175,28 @@ describe('discovery repository', () => {
   });
 
   it('returns future-dated upcoming titles ordered oldest first', async () => {
-    jest.spyOn(tvdbClient, 'filterMovies').mockResolvedValue({
-      data: [tvdbMovie(8, 'Future Film', '2099', 10, 'Announced')], links: tvdbLinks(1),
+    jest.spyOn(tmdbClient, 'upcomingMovies').mockImplementation(async (_page, region) => ({
+      results: region === 'IN'
+        ? [movieDto(8, 'Future Hindi Film', '2099-02-10')]
+        : [movieDto(7, 'Future Hollywood Film', '2099-01-05')],
+      total_pages: 3,
+    }));
+    jest.spyOn(tmdbClient, 'upcomingTvSeries').mockResolvedValue({
+      results: [tvDto(9, 'Future Show', '2099-03-01')],
+      total_pages: 2,
+    });
+    jest.spyOn(anilistClient, 'upcomingAnimePage').mockResolvedValue({
+      media: [{ id: 10, title: { english: 'Future Anime' }, startDate: { year: 2099, month: 1, day: 20 }, format: 'TV', status: 'NOT_YET_RELEASED' }],
+      hasNextPage: false,
+      lastPage: 1,
     } as never);
-    jest.spyOn(tvdbClient, 'filterSeries').mockImplementation(async ({ genre }) => ({
-      data: genre === 27
-        ? [tvdbSeries(10, 'Future Anime', '2099-04-01', '2099', 20, 'Continuing')]
-        : [tvdbSeries(9, 'Future Show', '2099-01-05', '2099', 30, 'Continuing')],
-      links: tvdbLinks(1),
-    } as never));
     const upcoming = await new RemoteCatalogRepository().getUpcoming();
-    expect(upcoming.map((item) => item.id)).toEqual(['tvdb:movie:8', 'tvdb:series:9', 'tvdb:anime:10']);
+    // Hollywood + Bollywood + shows + anime, oldest first — every row carries
+    // a full date from an English-title provider (TMDb / AniList).
+    expect(upcoming.map((item) => item.id)).toEqual(['tmdb:movie:7', 'anilist:anime:10', 'tmdb:movie:8', 'tmdb:series:9']);
     const dates = upcoming.map((item) => item.releaseDate ?? '');
     expect([...dates].sort()).toEqual(dates);
+    expect(dates.every((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))).toBe(true);
   });
 
   it('pages upcoming feeds with real provider totals', async () => {
@@ -212,6 +221,35 @@ describe('discovery repository', () => {
     await expect(repo.getUpcomingSeriesPage(1)).resolves.toMatchObject({ page: 1, totalPages: 2, items: [{ id: 'tmdb:series:42' }] });
     await expect(repo.getUpcomingAnimePage(1)).resolves.toMatchObject({ page: 1, totalPages: 1, items: [{ id: 'anilist:anime:43' }] });
     await expect(repo.getUpcomingMoviesPage(2)).resolves.toMatchObject({ page: 2, items: [{ id: 'tmdb:movie:41' }, { id: 'tmdb:movie:40' }] });
+  });
+
+  it('combines picker filters into one suggestion query', async () => {
+    const discoverMovies = jest.spyOn(tmdbClient, 'discoverMovies').mockResolvedValue({
+      results: [movieDto(50, 'Filtered Film', '2021-05-01')],
+      total_pages: 3,
+    });
+    const page = await new RemoteCatalogRepository().getSuggestionPage(1, { source: 'flops', kind: 'movies', industry: 'bollywood', year: 2021, genreId: 18 });
+    // One request carries the whole filter set: worst-rated, Hindi, 2021,
+    // Drama — with the vote floor and score ceiling that keep flops honest.
+    expect(discoverMovies).toHaveBeenCalledWith(1, expect.objectContaining({
+      language: 'hi', withGenres: '18', sortBy: 'vote_average.asc',
+      voteCountGte: 80, voteAverageLte: 4.8, primaryReleaseYear: 2021,
+    }), undefined);
+    expect(page).toMatchObject({ page: 1, totalPages: 3, items: [{ id: 'tmdb:movie:50' }] });
+  });
+
+  it('mixes movies, shows, and anime when the kind filter is all', async () => {
+    jest.spyOn(tmdbClient, 'discoverMovies').mockResolvedValue({ results: [movieDto(60, 'Soon Movie', '2099-01-01')], total_pages: 5 });
+    jest.spyOn(tmdbClient, 'discoverTv').mockResolvedValue({ results: [tvDto(61, 'Soon Show', '2099-02-01')], total_pages: 4 });
+    jest.spyOn(anilistClient, 'suggestAnimePage').mockResolvedValue({
+      media: [{ id: 62, title: { english: 'Soon Anime' }, startDate: { year: 2099, month: 3, day: 1 }, format: 'TV', status: 'NOT_YET_RELEASED' }],
+      hasNextPage: false,
+      lastPage: 1,
+    } as never);
+    const page = await new RemoteCatalogRepository().getSuggestionPage(1, { source: 'upcoming', kind: 'all', industry: 'all' });
+    // Interleaved movie / show / anime — all genuinely unreleased.
+    expect(page.items.map((item) => item.id)).toEqual(['tmdb:movie:60', 'tmdb:series:61', 'anilist:anime:62']);
+    expect(page.totalPages).toBe(5);
   });
 
   it('pages trending-all and bollywood feeds with capped totals', async () => {
