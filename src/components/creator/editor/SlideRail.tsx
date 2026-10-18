@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/common/AppText';
 import { IconButton } from '@/components/buttons/IconButton';
 import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
-import { slideRankOffset } from '@/features/creator/templates';
+import { collectionTitleStats, slideLayoutOf, slideRankOffset } from '@/features/creator/templates';
 import { colors, radius, spacing } from '@/theme';
 import type { CreatorProjectData, CreatorSlide, CreatorTemplateId } from '@/domain/models/creator';
 
@@ -29,6 +29,7 @@ export function SlideRail({ templateId, data, slides, index, canAddSlide, onSele
 }) {
   const active = slides[Math.min(index, slides.length - 1)];
   const activeIndex = slides.indexOf(active);
+  const collection = collectionTitleStats(slides);
   return (
     <View style={styles.container}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
@@ -52,6 +53,7 @@ export function SlideRail({ templateId, data, slides, index, canAddSlide, onSele
                 slide={slide}
                 width={THUMB_WIDTH}
                 rankOffset={slideRankOffset(slides, templateId, slideIndex)}
+                collection={slideLayoutOf(slide, templateId) === 'collage-cover' ? collection : undefined}
               />
               <View style={[styles.thumbBadge, selected && styles.thumbBadgeActive]}>
                 <AppText variant="caption" color={selected ? colors.background : colors.textSecondary} style={styles.thumbBadgeText}>{slideIndex + 1}</AppText>

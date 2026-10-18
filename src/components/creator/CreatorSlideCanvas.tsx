@@ -3,6 +3,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
 import { CREATOR_DEFAULT_BRANDING, type CreatorAccentId, type CreatorBranding, type CreatorSlide, type CreatorTemplateId, type CreatorTheme } from '@/domain/models/creator';
 import { SLIDE_BASE_HEIGHT, SLIDE_BASE_WIDTH } from '@/features/creator/exportPlan';
+import type { CreatorCollectionStats } from '@/features/creator/templates';
 import { creatorPalette } from './palette';
 import { renderSlideTemplate } from './templates';
 
@@ -19,7 +20,7 @@ import { renderSlideTemplate } from './templates';
  * memoization survives edits to other slides: an untouched slide keeps its
  * identity and skips re-rendering.
  */
-export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId, theme, accentId, showBranding, branding = CREATOR_DEFAULT_BRANDING, slide, width = SLIDE_BASE_WIDTH, radius = 0, rankOffset = 0 }: {
+export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId, theme, accentId, showBranding, branding = CREATOR_DEFAULT_BRANDING, slide, width = SLIDE_BASE_WIDTH, radius = 0, rankOffset = 0, collection }: {
   templateId: CreatorTemplateId;
   theme: CreatorTheme;
   accentId: CreatorAccentId;
@@ -30,6 +31,12 @@ export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId,
   radius?: number;
   /** Ranks consumed by earlier slides in a continuous numbered run (see `slideRankOffset`). */
   rankOffset?: number;
+  /**
+   * Project-wide pick stats for layouts that advertise the whole carousel
+   * (see `collectionTitleStats`). Callers pass it only to those layouts so
+   * untouched canvases keep memoizing.
+   */
+  collection?: CreatorCollectionStats;
 }) {
   const height = width * (SLIDE_BASE_HEIGHT / SLIDE_BASE_WIDTH);
   const palette = creatorPalette(theme, accentId);
@@ -51,7 +58,7 @@ export const CreatorSlideCanvas = memo(function CreatorSlideCanvas({ templateId,
           pointerEvents="none"
         />
         <View style={[styles.ring, { borderColor: palette.surfaceBorder }]} pointerEvents="none" />
-        {renderSlideTemplate(slide.layout ?? templateId, slide, palette, showBranding, branding, rankOffset)}
+        {renderSlideTemplate(slide.layout ?? templateId, slide, palette, showBranding, branding, rankOffset, collection)}
       </View>
     </View>
   );

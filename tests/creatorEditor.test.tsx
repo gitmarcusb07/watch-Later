@@ -9,6 +9,7 @@ import {
   type CreatorTitleRef,
 } from '@/domain/models/creator';
 import { createSlideForTemplate } from '@/features/creator/titleRefs';
+import { collectionTitleStats, type CreatorCollectionStats } from '@/features/creator/templates';
 
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'View' }));
 
@@ -21,7 +22,7 @@ function ref(overrides: Partial<CreatorTitleRef> & { title: string }): CreatorTi
 function renderCanvas(
   templateId: CreatorTemplateId,
   slide: CreatorSlide,
-  options: { theme?: 'dark' | 'light'; accentId?: CreatorAccentId; width?: number; branding?: CreatorBranding } = {},
+  options: { theme?: 'dark' | 'light'; accentId?: CreatorAccentId; width?: number; branding?: CreatorBranding; collection?: CreatorCollectionStats } = {},
 ): ReactTestRenderer {
   let tree!: ReactTestRenderer;
   act(() => {
@@ -34,6 +35,7 @@ function renderCanvas(
         branding={options.branding}
         slide={slide}
         width={options.width ?? 180}
+        collection={options.collection}
       />,
     );
   });
@@ -165,10 +167,10 @@ describe('creator slide canvases', () => {
     const coverText = textOf(renderCanvas('collage-cover', cover));
     expect(coverText).toContain('MOST ICONIC PICKS');
     expect(coverText).toContain('SWIPE FOR THE FULL LIST');
-    // The center strip counts the deck honestly (two movie refs).
+    // Without project stats the strip counts the deck honestly (two movies).
     expect(coverText).toContain('02');
-    expect(coverText).toContain('FEATURED');
-    expect(coverText).toContain('2 MOVIES');
+    expect(coverText).toContain('PICKS INSIDE');
+    expect(coverText).toContain('ALL MOVIES');
 
     const promo: CreatorSlide = {
       ...createSlideForTemplate('page-promo'),
@@ -178,6 +180,8 @@ describe('creator slide canvases', () => {
     expect(promoText).toContain('Cine Club');
     expect(promoText).toContain('@cineclub');
     expect(promoText).toContain('Nightly picks');
+    // The profile card carries an explicit follow button.
+    expect(promoText).toContain('Follow');
     expect(promoText).toContain('DON’T MISS THE NEXT DROP');
 
     // A closing note still carrying the cover's swipe cue reads wrong on the
@@ -185,6 +189,31 @@ describe('creator slide canvases', () => {
     const cuedText = textOf(renderCanvas('page-promo', { ...promo, closing: 'Swipe for the full list →' }));
     expect(cuedText).toContain('DON’T MISS THE NEXT DROP');
     expect(cuedText).not.toContain('SWIPE FOR THE FULL LIST');
+  });
+
+  it('advertises the whole carousel on the cover, not just the fanned five', () => {
+    const movies = (from: number, count: number) => Array.from({ length: count }, (_, index) => ref({ title: `Pick ${from + index}`, providerId: String(from + index) }));
+    const slides: CreatorSlide[] = [
+      { ...createSlideForTemplate('collage-cover'), titleRefs: movies(1, 5) },
+      // The second slide repeats the cover's five; the others carry the rest.
+      { ...createSlideForTemplate('top5'), titleRefs: movies(1, 5) },
+      { ...createSlideForTemplate('top5'), titleRefs: movies(6, 5) },
+      { ...createSlideForTemplate('top5'), titleRefs: movies(11, 5) },
+    ];
+    const collection = collectionTitleStats(slides);
+    expect(collection).toEqual({ total: 15, movies: 15, shows: 0, anime: 0 });
+
+    const text = textOf(renderCanvas('collage-cover', slides[0], { collection }));
+    expect(text).toContain('"15"');
+    expect(text).toContain('PICKS INSIDE');
+    expect(text).toContain('ALL MOVIES');
+    expect(text).not.toContain('FEATURED');
+
+    // Mixed projects break the count down per kind.
+    const mixed = textOf(renderCanvas('collage-cover', slides[0], { collection: { total: 7, movies: 5, shows: 1, anime: 1 } }));
+    expect(mixed).toContain('5 MOVIES');
+    expect(mixed).toContain('1 SHOW');
+    expect(mixed).toContain('1 ANIME');
   });
 
   it('dispatches per slide layout over the project template', () => {

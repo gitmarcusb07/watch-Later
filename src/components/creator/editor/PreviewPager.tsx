@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/common/AppText';
 import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
-import { slideRankOffset } from '@/features/creator/templates';
+import { collectionTitleStats, slideLayoutOf, slideRankOffset } from '@/features/creator/templates';
 import { colors, radius, spacing } from '@/theme';
 import type { CreatorProjectData, CreatorTemplateId } from '@/domain/models/creator';
 
@@ -23,6 +23,7 @@ export function PreviewPager({ templateId, data, index, onChangeIndex, pageWidth
 }) {
   const scrollRef = useRef<ScrollView>(null);
   const width = canvasMaxHeight ? Math.min(canvasWidth, canvasMaxHeight / 1.25) : canvasWidth;
+  const collection = collectionTitleStats(data.slides);
 
   // Keep the pager on the selected slide when the index changes elsewhere
   // (rail taps, slide add/remove) — never when the user is mid-swipe.
@@ -61,6 +62,7 @@ export function PreviewPager({ templateId, data, index, onChangeIndex, pageWidth
                 width={width}
                 radius={radius.large}
                 rankOffset={slideRankOffset(data.slides, templateId, slideIndex)}
+                collection={slideLayoutOf(slide, templateId) === 'collage-cover' ? collection : undefined}
               />
             </View>
           </View>

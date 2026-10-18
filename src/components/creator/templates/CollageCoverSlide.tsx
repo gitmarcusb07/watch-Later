@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
-import type { CreatorBranding, CreatorSlide, CreatorTitleRef } from '@/domain/models/creator';
+import type { CreatorBranding, CreatorSlide } from '@/domain/models/creator';
+import { titleStats, type CreatorCollectionStats } from '@/features/creator/templates';
 import type { CreatorPalette } from '../palette';
 import { BrandMark, SlidePoster, SlideText } from '../primitives';
 
@@ -21,35 +22,40 @@ function tileStyle(index: number, count: number) {
   };
 }
 
-/** "3 MOVIES · 2 SHOWS" — counted from the refs actually fanned on the cover. */
-function refsMix(refs: readonly CreatorTitleRef[]): string | undefined {
-  const counts = { movie: 0, series: 0, anime: 0 };
-  for (const ref of refs) counts[ref.mediaType] += 1;
+/** "9 MOVIES · 4 SHOWS" (or "ALL MOVIES") — counted from the whole carousel. */
+function statsMix(stats: CreatorCollectionStats): string | undefined {
   const parts: string[] = [];
-  if (counts.movie) parts.push(`${counts.movie} ${counts.movie === 1 ? 'MOVIE' : 'MOVIES'}`);
-  if (counts.series) parts.push(`${counts.series} ${counts.series === 1 ? 'SHOW' : 'SHOWS'}`);
-  if (counts.anime) parts.push(`${counts.anime} ANIME`);
-  return parts.length ? parts.join('  ·  ') : undefined;
+  if (stats.movies) parts.push(`${stats.movies} ${stats.movies === 1 ? 'MOVIE' : 'MOVIES'}`);
+  if (stats.shows) parts.push(`${stats.shows} ${stats.shows === 1 ? 'SHOW' : 'SHOWS'}`);
+  if (stats.anime) parts.push(`${stats.anime} ANIME`);
+  if (!parts.length) return undefined;
+  if (parts.length === 1) return `ALL ${stats.movies ? 'MOVIES' : stats.shows ? 'SHOWS' : 'ANIME'}`;
+  return parts.join('  ·  ');
 }
 
 /**
  * Carousel cover: a fanned poster deck up top, a between-the-lines feature
- * strip (how many picks, what kind) bridging the middle, and a giant stacked
- * headline burning through the scrim below. The `closing` line doubles as the
- * swipe cue ("Swipe for the full list"); clear it for a standalone cover
+ * strip (how many picks the project carries, by kind) bridging the middle,
+ * and a giant stacked headline burning through the scrim below. The strip
+ * advertises the whole carousel when the caller passes project stats — the
+ * fan itself still shows at most five posters. The `closing` line doubles as
+ * the swipe cue ("Swipe for the full list"); clear it for a standalone cover
  * post — a trailing arrow in the copy is dropped so the cue never doubles it.
  */
-export function CollageCoverSlide({ slide, palette, showBranding, branding }: {
+export function CollageCoverSlide({ slide, palette, showBranding, branding, collection }: {
   slide: CreatorSlide;
   palette: CreatorPalette;
   showBranding: boolean;
   branding: CreatorBranding;
+  /** Project-wide stats (see `collectionTitleStats`); falls back to this slide's refs. */
+  collection?: CreatorCollectionStats;
 }) {
   const refs = slide.titleRefs.slice(0, 5);
   const headline = slide.headline.trim() || 'MOST ICONIC PICKS';
   const subtitle = slide.subtitle.trim();
   const closing = slide.closing.trim().replace(/[\s→➜>-]+$/u, '');
-  const mix = refsMix(refs);
+  const stats = collection ?? titleStats(refs);
+  const mix = statsMix(stats);
   return (
     <View style={styles.root}>
       <View style={styles.collage} pointerEvents="none">
@@ -76,7 +82,7 @@ export function CollageCoverSlide({ slide, palette, showBranding, branding }: {
         pointerEvents="none"
       />
       {showBranding ? <BrandMark palette={palette} label={branding.name} style={styles.brand} /> : null}
-      {refs.length ? (
+      {stats.total ? (
         <View style={styles.detail} pointerEvents="none">
           <LinearGradient
             colors={[palette.accentSoft, 'transparent']}
@@ -89,9 +95,9 @@ export function CollageCoverSlide({ slide, palette, showBranding, branding }: {
             <View style={[styles.ornamentDot, { borderColor: palette.accent.primary }]} />
           </View>
           <View style={styles.detailRow}>
-            <SlideText style={[styles.detailCount, { color: palette.text }]} numberOfLines={1}>{String(refs.length).padStart(2, '0')}</SlideText>
+            <SlideText style={[styles.detailCount, { color: palette.text }]} numberOfLines={1}>{String(stats.total).padStart(2, '0')}</SlideText>
             <View style={styles.detailLabels}>
-              <SlideText style={[styles.detailLabel, { color: palette.accent.primary }]} numberOfLines={1}>FEATURED</SlideText>
+              <SlideText style={[styles.detailLabel, { color: palette.accent.primary }]} numberOfLines={1}>{stats.total === 1 ? 'PICK INSIDE' : 'PICKS INSIDE'}</SlideText>
               {mix ? <SlideText style={[styles.detailMix, { color: palette.textSecondary }]} numberOfLines={1}>{mix}</SlideText> : null}
             </View>
           </View>

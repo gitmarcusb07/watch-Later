@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import type { CreatorBranding, CreatorSlide, CreatorTemplateId } from '@/domain/models/creator';
+import type { CreatorCollectionStats } from '@/features/creator/templates';
 import type { CreatorPalette } from '../palette';
 import { SpotlightSlide } from './SpotlightSlide';
 import { RankedListSlide } from './RankedListSlide';
@@ -19,11 +20,13 @@ export function renderSlideTemplate(
   branding: CreatorBranding,
   /** Ranks consumed by earlier slides in a continuous numbered run (see `slideRankOffset`). */
   rankOffset = 0,
+  /** Project-wide pick stats for layouts that advertise the whole carousel. */
+  collection?: CreatorCollectionStats,
 ): ReactElement {
   const common = { slide, palette, showBranding, branding };
   switch (templateId) {
     case 'collage-cover':
-      return <CollageCoverSlide {...common} />;
+      return <CollageCoverSlide {...common} collection={collection} />;
     case 'stacked-ranking':
       return <StackedRankingSlide {...common} />;
     case 'page-promo':

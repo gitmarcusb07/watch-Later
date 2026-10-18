@@ -1,9 +1,11 @@
 import {
   CREATOR_MAX_SLIDES,
   CREATOR_TEMPLATE_IDS,
+  creatorTitleKey,
   type CreatorFormat,
   type CreatorSlide,
   type CreatorTemplateId,
+  type CreatorTitleRef,
 } from '@/domain/models/creator';
 
 /**
@@ -214,6 +216,45 @@ export function slideRankOffset(slides: readonly CreatorSlide[], templateId: Cre
     offset += Math.min(slide.titleRefs.length, creatorTemplate(layout).maxTitles);
   }
   return offset;
+}
+
+/** How many picks a project carries, split by kind — the cover's feature strip. */
+export interface CreatorCollectionStats {
+  total: number;
+  movies: number;
+  shows: number;
+  anime: number;
+}
+
+/** Counts title refs by kind. */
+export function titleStats(refs: readonly CreatorTitleRef[]): CreatorCollectionStats {
+  const stats: CreatorCollectionStats = { total: 0, movies: 0, shows: 0, anime: 0 };
+  for (const ref of refs) {
+    stats.total += 1;
+    if (ref.mediaType === 'movie') stats.movies += 1;
+    else if (ref.mediaType === 'series') stats.shows += 1;
+    else stats.anime += 1;
+  }
+  return stats;
+}
+
+/**
+ * The project's picks deduped by title. A cover fans only its first five
+ * posters but still advertises the whole carousel ("15 picks inside"), and a
+ * title pinned to two slides is still one pick.
+ */
+export function collectionTitleStats(slides: readonly CreatorSlide[]): CreatorCollectionStats {
+  const seen = new Set<string>();
+  const refs: CreatorTitleRef[] = [];
+  for (const slide of slides) {
+    for (const ref of slide.titleRefs) {
+      const key = creatorTitleKey(ref);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push(ref);
+    }
+  }
+  return titleStats(refs);
 }
 
 /** True when a slide shows release dates as a first-class column. */

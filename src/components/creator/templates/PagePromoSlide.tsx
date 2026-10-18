@@ -21,10 +21,12 @@ const SWIPE_CUE = /^swipe\b/i;
 /**
  * Closing slide: brand profile card over a backdrop (or the accent gradient
  * when no title is attached) with a follow call-to-action — the "if you like
- * this, follow the page" card of a carousel. The page identity comes from the
- * project's branding fields; nothing here is invented. A closing note that is
- * still the cover's swipe cue ("Swipe for the full list") reads wrong on the
- * final slide of the carousel, so the card substitutes its own follow CTA.
+ * this, follow the page" card of a carousel. The profile row carries an
+ * explicit Follow chip and the closing note (or its fallback) renders as the
+ * CTA below. The page identity comes from the project's branding fields;
+ * nothing here is invented. A closing note that is still the cover's swipe
+ * cue ("Swipe for the full list") reads wrong on the final slide of the
+ * carousel, so the card substitutes its own follow CTA.
  */
 export function PagePromoSlide({ slide, palette, showBranding, branding }: {
   slide: CreatorSlide;
@@ -65,6 +67,10 @@ export function PagePromoSlide({ slide, palette, showBranding, branding }: {
               </SlideText>
               {handle && tagline ? <SlideText style={[styles.cardLine, { color: palette.textMuted }]} numberOfLines={1}>{tagline}</SlideText> : null}
             </View>
+            <View style={[styles.follow, { backgroundColor: palette.accent.primary }]}>
+              <Ionicons name="person-add" size={11} color={palette.accent.ink} />
+              <SlideText style={[styles.followText, { color: palette.accent.ink }]}>Follow</SlideText>
+            </View>
           </View>
         ) : null}
         {cta ? (
@@ -84,11 +90,13 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 26, alignItems: 'center', gap: 0 },
   headline: { fontSize: 29, lineHeight: 32, fontWeight: '900', letterSpacing: 0.4, textAlign: 'center' },
   subtitle: { fontSize: 12, lineHeight: 16.5, fontWeight: '500', textAlign: 'center', marginTop: 7 },
-  card: { flexDirection: 'row', alignItems: 'center', gap: 11, borderWidth: 1, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 12, marginTop: 16, minWidth: 250, shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
+  card: { flexDirection: 'row', alignItems: 'center', gap: 11, borderWidth: 1, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 12, marginTop: 16, minWidth: 250, maxWidth: 308, shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
   avatar: { width: 42, height: 42, borderRadius: 12 },
   cardText: { flex: 1, minWidth: 0, gap: 1 },
   cardName: { fontSize: 15, lineHeight: 18, fontWeight: '800' },
   cardLine: { fontSize: 10.5, lineHeight: 13.5, fontWeight: '500' },
+  follow: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  followText: { fontSize: 10, lineHeight: 12, fontWeight: '800', letterSpacing: 0.4 },
   cta: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 999, paddingHorizontal: 20, paddingVertical: 11, marginTop: 18, minWidth: 250, justifyContent: 'center', shadowOpacity: 0.32, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
   ctaText: { fontSize: 12, lineHeight: 15, fontWeight: '800', letterSpacing: 1.2, flexShrink: 1 },
 });

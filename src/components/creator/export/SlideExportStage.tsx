@@ -3,7 +3,7 @@ import { Image, StyleSheet, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import type { CreatorProjectData, CreatorTemplateId } from '@/domain/models/creator';
 import type { ExportSlidePlan } from '@/features/creator/exportPlan';
-import { slideRankOffset } from '@/features/creator/templates';
+import { collectionTitleStats, slideLayoutOf, slideRankOffset } from '@/features/creator/templates';
 import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
 
 /**
@@ -78,6 +78,7 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
     return () => { cancelled = true; };
   }, [request, data]);
 
+  const collection = collectionTitleStats(data.slides);
   const node = request ? (
     <View style={styles.stage} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessible={false}>
       {request.plan.map((item) => {
@@ -99,6 +100,7 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
               branding={data.branding}
               slide={slide}
               rankOffset={slideRankOffset(data.slides, templateId, slideIndex)}
+              collection={slideLayoutOf(slide, templateId) === 'collage-cover' ? collection : undefined}
             />
           </View>
         );
