@@ -90,10 +90,11 @@ export async function fetchCatalogSeason(identity: MediaIdentity, seasonNumber: 
   return queryClient.fetchQuery(catalogSeasonOptions(identity, seasonNumber, summary));
 }
 
-export function useTrending() {
+export function useTrending(enabled = true) {
   return useQuery({
     queryKey: ['catalog', 'trending'] as const,
     queryFn: ({ signal }) => catalogRepository.getTrending(signal),
+    enabled,
     staleTime: 15 * 60_000,
     gcTime: 60 * 60_000,
   });
@@ -117,10 +118,11 @@ export function useTopRated() {
   });
 }
 
-export function useUpcomingCatalog() {
+export function useUpcomingCatalog(enabled = true) {
   return useQuery({
     queryKey: ['catalog', 'upcoming'] as const,
     queryFn: ({ signal }) => catalogRepository.getUpcoming(signal),
+    enabled,
     staleTime: 30 * 60_000,
     gcTime: 60 * 60_000,
   });

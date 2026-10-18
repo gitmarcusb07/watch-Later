@@ -34,8 +34,8 @@ function useInvalidateWatchState() {
   };
 }
 
-export function useWatchlist() {
-  return useQuery({ queryKey: watchKeys.watchlist, queryFn: () => watchStateRepository.getWatchlist() });
+export function useWatchlist(enabled = true) {
+  return useQuery({ queryKey: watchKeys.watchlist, queryFn: () => watchStateRepository.getWatchlist(), enabled });
 }
 
 export function useWatchedLibrary() {
@@ -394,8 +394,8 @@ export function useInterestedCounts(): { data: Map<string, number>; isLoading: b
   return { data: counts, isLoading: query.isLoading, isError: query.isError, refetch: () => void query.refetch() };
 }
 
-export function useCustomLists() {
-  return useQuery({ queryKey: watchKeys.lists, queryFn: () => watchStateRepository.getCustomLists() });
+export function useCustomLists(enabled = true) {
+  return useQuery({ queryKey: watchKeys.lists, queryFn: () => watchStateRepository.getCustomLists(), enabled });
 }
 
 export function useFolders() {
@@ -472,11 +472,13 @@ export function useCreateCustomEntry() {
     mutationFn: (input: { title: string; year?: number; mediaType: CatalogMedia['mediaType']; notes?: string }) => watchStateRepository.createCustomEntry(input),
     onSuccess: () => invalidate(true),
   });
-}export function useCustomList(id: string | undefined) {
+}
+
+export function useCustomList(id: string | undefined, enabled = true) {
   return useQuery({
     queryKey: id ? [...watchKeys.lists, id] : ['watch', 'lists', 'none'],
     queryFn: async () => id ? (await watchStateRepository.getCustomList(id)) ?? null : null,
-    enabled: Boolean(id),
+    enabled: Boolean(id) && enabled,
   });
 }
 

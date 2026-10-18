@@ -103,3 +103,35 @@ describe('Supabase watchlist priority migration', () => {
     expect(sql).not.toContain('with check (true)');
   });
 });
+
+describe('Supabase creator projects migration', () => {
+  const sql = readFileSync('supabase/migrations/202610180001_creator_projects.sql', 'utf8').toLowerCase();
+
+  it('keeps drafts owner-scoped with grants and a touch trigger', () => {
+    expect(sql).toContain('alter table public.creator_projects enable row level security');
+    expect(sql).toMatch(/create policy ".*" on public\.creator_projects for select to authenticated using \(user_id = \(select auth\.uid\(\)\)\)/);
+    expect(sql).toMatch(/create policy ".*" on public\.creator_projects for insert to authenticated with check \(user_id = \(select auth\.uid\(\)\)\)/);
+    expect(sql).toMatch(/create policy ".*" on public\.creator_projects for update to authenticated using \(user_id = \(select auth\.uid\(\)\)\) with check \(user_id = \(select auth\.uid\(\)\)\)/);
+    expect(sql).toMatch(/create policy ".*" on public\.creator_projects for delete to authenticated using \(user_id = \(select auth\.uid\(\)\)\)/);
+    expect(sql).toContain('grant select, insert, update, delete on public.creator_projects to authenticated');
+    expect(sql).not.toMatch(/to anon|to public\b/);
+    expect(sql).not.toContain('using (true)');
+    expect(sql).not.toContain('with check (true)');
+  });
+
+  it('validates template ids, formats, and the fixed 4:5 ratio with a latest-first index', () => {
+    expect(sql).toContain(`check (template_id in (`);
+    expect(sql).toContain(`'movie-spotlight'`);
+    expect(sql).toContain(`'upcoming-releases'`);
+    expect(sql).toContain(`check (format in ('post', 'carousel'))`);
+    expect(sql).toContain(`check (aspect_ratio = '4:5')`);
+    expect(sql).toContain(`jsonb_typeof(slide_data) = 'object'`);
+    expect(sql).toContain(`slide_data ? 'slides'`);
+    expect(sql).toContain(`jsonb_typeof(slide_data -> 'slides') = 'array'`);
+    expect(sql).toContain('create index if not exists creator_projects_user_updated_idx');
+    expect(sql).toContain('created_at timestamptz not null default now()');
+    expect(sql).toContain('updated_at timestamptz not null default now()');
+    expect(sql).toContain('creator_projects_touch_updated_at');
+    expect(sql).toContain('new.updated_at = now()');
+  });
+});
