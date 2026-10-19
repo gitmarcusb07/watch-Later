@@ -1,22 +1,25 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { Linking, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Image, Linking, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { AppButton } from '@/components/buttons/AppButton';
 import { AppText } from '@/components/common/AppText';
 import { showDialog, showToast } from '@/components/feedback/AppDialog';
 import { SegmentedTabs } from '@/components/creator/editor/controls';
 import type { CreatorProjectData, CreatorTemplateId } from '@/domain/models/creator';
 import { buildExportPlan, EXPORT_HEIGHT, EXPORT_WIDTH, type ExportSlidePlan } from '@/features/creator/exportPlan';
+import { collectExportImageUrls } from '@/features/creator/exportImages';
 import { saveImagesToGallery, shareImage } from '@/features/creator/exportService';
 import { showFriendlyError } from '@/lib/friendlyError';
 import { colors, radius, spacing } from '@/theme';
 
 /**
- * Export sheet: renders the chosen slides locally at 1080 x 1350 (the slides
- * are authored at 360 x 450 and captured at 3x) and either saves them to the
- * gallery or opens the system share sheet. Rendering happens on demand, the
- * media-library permission is requested only when saving, and nothing leaves
- * the device except through the share sheet the user picks.
+ * Export sheet: renders the chosen slides locally at 1080 x 1350 (authored at
+ * 360 x 450 and supersampled at 2x before capture) and either saves them to
+ * the gallery or opens the system share sheet. Opening the sheet starts
+ * prefetching the export-resolution artworks so the capture wait finds them
+ * cached. Rendering happens on demand, the media-library permission is
+ * requested only when saving, and nothing leaves the device except through
+ * the share sheet the user picks.
  */
 
 type ExportScope = 'current' | 'all';
@@ -35,6 +38,14 @@ export function ExportSheet({ visible, projectName, templateId, data, activeSlid
   const [scope, setScope] = useState<ExportScope>('all');
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  // Warm the image cache with the export-resolution artworks while the user
+  // is still choosing scope — the capture wait is short and bounded.
+  useEffect(() => {
+    if (!visible) return;
+    const refs = data.slides.flatMap((slide) => slide.titleRefs);
+    for (const url of collectExportImageUrls(refs)) void Image.prefetch(url).catch(() => false);
+  }, [visible, data]);
 
   const multiSlide = data.slides.length > 1;
   const effectiveScope: ExportScope = multiSlide ? scope : 'current';

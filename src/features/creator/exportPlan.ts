@@ -15,6 +15,17 @@ export const SLIDE_BASE_HEIGHT = 450;
 
 export const EXPORT_SCALE = EXPORT_WIDTH / SLIDE_BASE_WIDTH;
 
+/**
+ * The export stage renders each slide at 2x the authoring size (720 x 900)
+ * before capture. Text and posters rasterize at capture resolution instead of
+ * being upscaled from the 360-wide layout, which is what made downloaded
+ * slides look soft once Instagram re-encoded them. The captured PNG is still
+ * 1080 x 1350 — the extra render size only buys sharpness.
+ */
+export const EXPORT_RENDER_SCALE = 2;
+export const EXPORT_STAGE_WIDTH = SLIDE_BASE_WIDTH * EXPORT_RENDER_SCALE;
+export const EXPORT_STAGE_HEIGHT = SLIDE_BASE_HEIGHT * EXPORT_RENDER_SCALE;
+
 export interface ExportSlidePlan {
   slideId: string;
   /** 1-based position in the exported set. */

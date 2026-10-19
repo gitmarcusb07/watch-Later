@@ -12,6 +12,7 @@ import { tvdbClient } from '@/data/remote/tvdb/client';
 import { interleaveRanked, RemoteCatalogRepository, catalogRepository } from '@/data/remote/catalog/RemoteCatalogRepository';
 import { languageName, countryName } from '@/features/catalog/metaNames';
 import { useRecentlyReleased, useTrending } from '@/features/catalog/hooks';
+import { pendingUpcomingItems, sortUpcomingBatch } from '@/features/catalog/upcomingStream';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -450,5 +451,26 @@ describe('metadata display names', () => {
     expect(countryName('US')).toBe('USA');
     expect(countryName('ZZ')).toBe('ZZ');
     expect(countryName(undefined)).toBeUndefined();
+  });
+});
+
+describe('upcoming stream merge', () => {
+  const media = (id: number, date: string) => mapTmdbMovie(movieDto(id, `Film ${id}`, date));
+
+  it('emits every unseen page row once, across feeds, in page order', () => {
+    const feeds = [
+      { data: { pages: [{ items: [media(1, '2099-01-10'), media(2, '2099-01-05')], page: 1, totalPages: 3 }] } },
+      // The second feed repeats row 2 (already emitted in this batch) and
+      // repeats row 3, which the screen has already shown.
+      { data: { pages: [{ items: [media(2, '2099-01-05'), media(3, '2099-01-01')], page: 1, totalPages: 2 }] } },
+    ];
+    const pending = pendingUpcomingItems(feeds, new Set(['tmdb:movie:3']));
+    expect(pending.map((item) => item.id)).toEqual(['tmdb:movie:1', 'tmdb:movie:2']);
+  });
+
+  it('sorts inside one arriving batch and sinks undated rows to its bottom', () => {
+    const batch = [media(4, '2099-03-01'), media(5, '2099-01-01'), media(6, '')];
+    expect(sortUpcomingBatch(batch).map((item) => item.id)).toEqual(['tmdb:movie:5', 'tmdb:movie:4', 'tmdb:movie:6']);
+    expect(batch.map((item) => item.id)).toEqual(['tmdb:movie:4', 'tmdb:movie:5', 'tmdb:movie:6']);
   });
 });

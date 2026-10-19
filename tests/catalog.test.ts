@@ -306,6 +306,27 @@ describe('catalog request and provider clients', () => {
     expect(result.items.map((item) => item.title)).toEqual(['Brand New Day']);
   });
 
+  it('joins best-effort AniList rows so anime searches find unreleased titles', async () => {
+    const repo = new RemoteCatalogRepository();
+    jest.spyOn(tvdbClient, 'search').mockResolvedValue([] as never);
+    jest.spyOn(tmdbClient, 'searchMovies').mockResolvedValue({ results: [] } as never);
+    jest.spyOn(tmdbClient, 'searchTv').mockResolvedValue({ results: [] } as never);
+    const anime = {
+      ...animeDto,
+      id: 21,
+      title: { english: 'One Piece', romaji: 'One Piece', native: 'ワンピース' },
+      status: 'RELEASING',
+      startDate: { year: 2026, month: 10, day: 4 },
+      episodes: null,
+    };
+    const searchAnime = jest.spyOn(anilistClient, 'searchAnime').mockResolvedValue([anime] as never);
+    const result = await repo.search('one piece', 'all');
+    expect(searchAnime).toHaveBeenCalledWith('one piece', undefined);
+    expect(result.items).toEqual([expect.objectContaining({ id: 'anilist:anime:21', title: 'One Piece', mediaType: 'anime' })]);
+    // AniList is supplementary: its rows never claim a provider failure.
+    expect(result.unavailableProviders).toEqual([]);
+  });
+
   it('keeps a same-name title from a different era instead of folding it into TVDB', async () => {
     process.env.EXPO_PUBLIC_TMDB_API_KEY = 'test-key';
     const tvdbKing = {

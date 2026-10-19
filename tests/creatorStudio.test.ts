@@ -40,7 +40,10 @@ import {
 import { composeCaption, suggestCaptions, suggestHashtags } from '@/features/creator/captions';
 import {
   EXPORT_HEIGHT,
+  EXPORT_RENDER_SCALE,
   EXPORT_SCALE,
+  EXPORT_STAGE_HEIGHT,
+  EXPORT_STAGE_WIDTH,
   EXPORT_WIDTH,
   SLIDE_BASE_HEIGHT,
   SLIDE_BASE_WIDTH,
@@ -48,6 +51,8 @@ import {
   creatorExportFileName,
   safeFileBase,
 } from '@/features/creator/exportPlan';
+import { collectExportImageUrls, upgradeExportImageUrl, withExportQualityImages } from '@/features/creator/exportImages';
+import { carouselCompletionHint, carouselCompletionMessage, planCarouselCompletion } from '@/features/creator/completeCarousel';
 import {
   formatScore,
   formatSlideDate,
@@ -618,6 +623,13 @@ describe('creator export plan', () => {
     expect(SLIDE_BASE_WIDTH / SLIDE_BASE_HEIGHT).toBeCloseTo(4 / 5);
   });
 
+  it('supersamples the capture stage at 2x while the captured PNG stays 1080 x 1350', () => {
+    expect(EXPORT_RENDER_SCALE).toBe(2);
+    expect(EXPORT_STAGE_WIDTH).toBe(720);
+    expect(EXPORT_STAGE_HEIGHT).toBe(900);
+    expect(EXPORT_STAGE_WIDTH / EXPORT_STAGE_HEIGHT).toBeCloseTo(4 / 5);
+  });
+
   it('names files safely across platforms', () => {
     expect(safeFileBase('My Top 5!')).toBe('my-top-5');
     expect(safeFileBase('Café Night')).toBe('cafe-night');
@@ -641,5 +653,145 @@ describe('creator export plan', () => {
     expect(one[0].fileName).toBe('watch-later-my-post');
 
     expect(() => buildExportPlan(data, 'My Post', 'top5', { slideId: 'missing' })).toThrow('no longer part of this project');
+  });
+});
+
+describe('creator export image upgrade', () => {
+  it('rewrites TMDb artwork to its export size and leaves everything else alone', () => {
+    expect(upgradeExportImageUrl('https://image.tmdb.org/t/p/w500/p.jpg')).toBe('https://image.tmdb.org/t/p/w1280/p.jpg');
+    expect(upgradeExportImageUrl('https://image.tmdb.org/t/p/w780/b.jpg')).toBe('https://image.tmdb.org/t/p/w1280/b.jpg');
+    expect(upgradeExportImageUrl('https://image.tmdb.org/t/p/w300/s.jpg')).toBe('https://image.tmdb.org/t/p/w780/s.jpg');
+    expect(upgradeExportImageUrl('https://image.tmdb.org/t/p/original/p.jpg')).toBe('https://image.tmdb.org/t/p/original/p.jpg');
+    expect(upgradeExportImageUrl('https://img.example/cover/x.jpg')).toBe('https://img.example/cover/x.jpg');
+    expect(upgradeExportImageUrl(undefined)).toBeUndefined();
+  });
+
+  it('upgrades only the stage copy of a project and keeps untouched slides identical', () => {
+    const data = projectData([
+      slide({
+        titleRefs: [ref({ title: 'A', posterUrl: 'https://image.tmdb.org/t/p/w500/a.jpg', backdropUrl: 'https://image.tmdb.org/t/p/w780/a-b.jpg' })],
+      }, 'stacked-ranking'),
+      slide({ titleRefs: [ref({ title: 'B', providerId: '2', posterUrl: 'https://img.example/b.jpg' })] }, 'stacked-ranking'),
+    ]);
+    const upgraded = withExportQualityImages(data);
+    expect(upgraded.slides[0].titleRefs[0]).toMatchObject({
+      posterUrl: 'https://image.tmdb.org/t/p/w1280/a.jpg',
+      backdropUrl: 'https://image.tmdb.org/t/p/w1280/a-b.jpg',
+    });
+    // The saved draft keeps its feed-sized URLs; a second pass is a no-op.
+    expect(data.slides[0].titleRefs[0].posterUrl).toBe('https://image.tmdb.org/t/p/w500/a.jpg');
+    expect(upgraded.slides[1]).toBe(data.slides[1]);
+    expect(withExportQualityImages(upgraded)).toBe(upgraded);
+  });
+
+  it('collects deduped, upgraded artwork for the export prefetch', () => {
+    const url = 'https://image.tmdb.org/t/p/w500/a.jpg';
+    expect(collectExportImageUrls([
+      ref({ title: 'A', posterUrl: url, backdropUrl: 'https://image.tmdb.org/t/p/w780/a-b.jpg' }),
+      ref({ title: 'A again', providerId: '1', posterUrl: url }),
+    ])).toEqual(['https://image.tmdb.org/t/p/w1280/a.jpg', 'https://image.tmdb.org/t/p/w1280/a-b.jpg']);
+  });
+});
+
+describe('creator carousel completion', () => {
+  const pick = (index: number) => ref({ title: `T${index}`, providerId: String(index) });
+  const picks = (start: number, count: number) => Array.from({ length: count }, (_, offset) => pick(start + offset));
+
+  it('turns cover picks into a full-list slide and closes with a follow card', () => {
+    const slides = [slide({ titleRefs: picks(0, 5) }, 'collage-cover')];
+    const plan = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides });
+    expect(plan.gaps).toEqual(['full-list', 'follow-card']);
+    expect(plan.missingTitles).toBe(5);
+    expect(plan.listSlides).toBe(1);
+    expect(plan.added.map((item) => item.layout)).toEqual(['stacked-ranking', 'page-promo']);
+    expect(plan.slides.map((item) => item.layout)).toEqual(['collage-cover', 'stacked-ranking', 'page-promo']);
+    expect(plan.slides[1].titleRefs.map((item) => item.title)).toEqual(['T0', 'T1', 'T2', 'T3', 'T4']);
+  });
+
+  it('never re-lists picks that already sit on list layouts', () => {
+    const slides = [slide({ titleRefs: picks(0, 5) }, 'top5'), slide({}, 'page-promo')];
+    const plan = planCarouselCompletion({ templateId: 'top5', format: 'carousel', slides });
+    expect(plan.gaps).toEqual([]);
+    expect(plan.added).toEqual([]);
+    // Nothing to do returns the exact input array so callers keep identity.
+    expect(plan.slides).toBe(slides);
+  });
+
+  it('offers the closing follow card even before any picks exist, and skips listed gaps', () => {
+    const bare = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides: [slide({}, 'collage-cover')] });
+    expect(bare.gaps).toEqual(['follow-card']);
+    expect(bare.missingTitles).toBe(0);
+
+    const listed = planCarouselCompletion({ templateId: 'top5', format: 'carousel', slides: [slide({ titleRefs: picks(0, 3) }, 'top5')] });
+    expect(listed.gaps).toEqual(['follow-card']);
+    expect(listed.slides.map((item) => item.layout)).toEqual(['top5', 'page-promo']);
+  });
+
+  it('adds only the picks missing from list layouts and chunks by five', () => {
+    const slides = [
+      slide({ titleRefs: picks(0, 5) }, 'collage-cover'),
+      slide({ titleRefs: picks(5, 2) }, 'collage-cover'),
+    ];
+    const plan = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides });
+    expect(plan.missingTitles).toBe(7);
+    expect(plan.listSlides).toBe(2);
+    const lists = plan.added.filter((item) => item.layout === 'stacked-ranking');
+    expect(lists.map((item) => item.titleRefs.length)).toEqual([5, 2]);
+    expect(lists[1].titleRefs.map((item) => item.title)).toEqual(['T5', 'T6']);
+  });
+
+  it('lists only the unlisted remainder when some picks are already listed', () => {
+    const slides = [
+      slide({ titleRefs: picks(0, 2) }, 'top5'),
+      slide({ titleRefs: picks(0, 5) }, 'collage-cover'),
+    ];
+    const plan = planCarouselCompletion({ templateId: 'top5', format: 'carousel', slides });
+    expect(plan.gaps).toEqual(['full-list', 'follow-card']);
+    const list = plan.added[0];
+    expect(list.titleRefs.map((item) => item.title)).toEqual(['T2', 'T3', 'T4']);
+  });
+
+  it('is carousel-only and respects the slide cap', () => {
+    const post = planCarouselCompletion({ templateId: 'collage-cover', format: 'post', slides: [slide({ titleRefs: picks(0, 3) }, 'collage-cover')] });
+    expect(post.gaps).toEqual([]);
+    expect(post.added).toEqual([]);
+
+    const nearlyFull = [slide({ titleRefs: picks(0, 5) }, 'collage-cover'), ...Array.from({ length: 8 }, () => slide({}, 'stacked-ranking'))];
+    const plan = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides: nearlyFull });
+    // One slot left: the full list fits, the follow card no longer does.
+    expect(plan.gaps).toEqual(['full-list']);
+    expect(plan.added).toHaveLength(1);
+
+    const full = [...nearlyFull, slide({}, 'stacked-ranking')];
+    const fullPlan = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides: full });
+    expect(fullPlan.added).toEqual([]);
+    expect(fullPlan.slides).toBe(full);
+  });
+
+  it('inserts the full list before an existing closing promo', () => {
+    const slides = [slide({ titleRefs: picks(0, 3) }, 'collage-cover'), slide({}, 'page-promo')];
+    const plan = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides });
+    expect(plan.gaps).toEqual(['full-list']);
+    expect(plan.slides.map((item) => item.layout)).toEqual(['collage-cover', 'stacked-ranking', 'page-promo']);
+  });
+
+  it('describes the gaps for the suggestion row and the tap toast', () => {
+    const plan = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides: [slide({ titleRefs: picks(0, 2) }, 'collage-cover')] });
+    expect(carouselCompletionHint(plan)).toBe('2 picks not in a list yet · no follow card closing the set');
+    expect(carouselCompletionMessage(plan)).toBe('1 full-list slide added · follow card added');
+
+    const followOnly = planCarouselCompletion({ templateId: 'collage-cover', format: 'carousel', slides: [slide({}, 'collage-cover')] });
+    expect(carouselCompletionHint(followOnly)).toBe('no follow card closing the set');
+    expect(carouselCompletionMessage(followOnly)).toBe('follow card added');
+  });
+
+  it('reduces a completion tap through the editor reducer, once', () => {
+    const state = createEditorState({ name: 'Cover', templateId: 'collage-cover', format: 'carousel' });
+    const withPicks = creatorEditorReducer(state, { type: 'addTitles', slideId: state.data.slides[0].id, refs: picks(0, 3) });
+    const finished = creatorEditorReducer(withPicks, { type: 'completeCarousel' });
+    expect(finished.dirty).toBe(true);
+    expect(finished.data.slides.map((item) => item.layout)).toEqual(['collage-cover', 'stacked-ranking', 'page-promo']);
+    // Everything is finished — a second tap changes nothing.
+    expect(creatorEditorReducer(finished, { type: 'completeCarousel' })).toBe(finished);
   });
 });

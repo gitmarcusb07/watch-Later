@@ -19,6 +19,7 @@ import {
   type CreatorTitleRef,
 } from '@/domain/models/creator';
 import { creatorTemplate } from './templates';
+import { planCarouselCompletion } from './completeCarousel';
 import { addTitleRefsToSlides, createSlideForTemplate } from './titleRefs';
 import { clampCreatorText, formatMaxSlides } from './validation';
 
@@ -61,6 +62,7 @@ export type CreatorEditorAction =
   | { type: 'duplicateSlide'; slideId: string }
   | { type: 'removeSlide'; slideId: string }
   | { type: 'moveSlide'; slideId: string; direction: -1 | 1 }
+  | { type: 'completeCarousel' }
   | { type: 'markSaved'; projectId: string; name: string };
 
 const TEXT_LIMITS: Record<CreatorSlideTextKey, number> = {
@@ -162,6 +164,11 @@ export function creatorEditorReducer(state: CreatorEditorState, action: CreatorE
       if (slides === state.data.slides) return state;
       return { ...state, data: { ...state.data, slides }, dirty: true };
     }
+    case 'completeCarousel': {
+      const plan = planCarouselCompletion({ templateId: state.templateId, format: state.format, slides: state.data.slides });
+      if (!plan.added.length) return state;
+      return { ...state, data: { ...state.data, slides: plan.slides }, dirty: true };
+    }
     case 'markSaved':
       return { ...state, projectId: action.projectId, name: action.name, dirty: false };
   }
@@ -225,6 +232,7 @@ export interface CreatorEditorActions {
   duplicateSlide: (slideId: string) => void;
   removeSlide: (slideId: string) => void;
   moveSlide: (slideId: string, direction: -1 | 1) => void;
+  completeCarousel: () => void;
   markSaved: (projectId: string, name: string) => void;
 }
 
@@ -247,6 +255,7 @@ export function useCreatorEditor(initial: CreatorEditorState) {
     duplicateSlide: (slideId: string) => dispatch({ type: 'duplicateSlide', slideId }),
     removeSlide: (slideId: string) => dispatch({ type: 'removeSlide', slideId }),
     moveSlide: (slideId: string, direction: -1 | 1) => dispatch({ type: 'moveSlide', slideId, direction }),
+    completeCarousel: () => dispatch({ type: 'completeCarousel' }),
     markSaved: (projectId: string, name: string) => dispatch({ type: 'markSaved', projectId, name }),
   }), []);
   return { state, actions, canAddSlide: state.data.slides.length < formatMaxSlides(state.format) };

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { BackHandler, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { BackHandler, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { AppButton } from '@/components/buttons/AppButton';
 import { IconButton } from '@/components/buttons/IconButton';
 import { AppText } from '@/components/common/AppText';
@@ -16,6 +16,7 @@ import { ExportSheet } from '@/components/creator/editor/ExportSheet';
 import { CaptionInspector, ContentInspector, StyleInspector, TitlesInspector } from '@/components/creator/editor/inspectors';
 import { useSlideExporter } from '@/components/creator/export/SlideExportStage';
 import { creatorTemplate, isCreatorTemplateId, slideLayoutOf } from '@/features/creator/templates';
+import { planCarouselCompletion, carouselCompletionHint, carouselCompletionMessage } from '@/features/creator/completeCarousel';
 import { createEditorState, defaultProjectName, previewAddTitles, useCreatorEditor, type CreatorEditorState } from '@/features/creator/useCreatorEditor';
 import { useCreatorDraft, useSaveCreatorDraft } from '@/features/creator/hooks';
 import { CREATOR_SEEDS, creatorSeedTarget, parseCreatorSeed, useCreatorSeed } from '@/features/creator/useCreatorSeed';
@@ -24,7 +25,7 @@ import { creatorTitleKey, CREATOR_MAX_NAME, type CreatorFormat, type CreatorTemp
 import { showFriendlyError } from '@/lib/friendlyError';
 import { triggerSuccessHaptic } from '@/lib/haptics';
 import { CONTENT_MAX_WIDTH } from '@/theme/responsive';
-import { colors, spacing } from '@/theme';
+import { colors, radius, spacing } from '@/theme';
 
 /**
  * Creator Studio editor. Template-based (no free canvas): the route resolves
@@ -145,6 +146,13 @@ function CreatorEditorView({ initial, seeded }: {
   const activeSlide = slides[safeIndex];
   const activeLayoutId = slideLayoutOf(activeSlide, state.templateId);
 
+  // What a single "Finish" tap would add: full-list slides for picks that only
+  // live in non-list layouts, and a closing follow card when none exists.
+  const completion = useMemo(
+    () => planCarouselCompletion({ templateId: state.templateId, format: state.format, slides }),
+    [state.templateId, state.format, slides],
+  );
+
   // Fixed slide proportions on every screen: page = full content width, the
   // canvas shrinks on short screens so the rail and inspector stay reachable.
   const contentWidth = Math.min(width, CONTENT_MAX_WIDTH) - 2 * spacing.xl;
@@ -217,6 +225,12 @@ function CreatorEditorView({ initial, seeded }: {
     else if (preview.added > 1) showToast(`${preview.added} titles added`, 'success');
   }
 
+  function finishCarousel() {
+    if (!completion.gaps.length) return;
+    actions.completeCarousel();
+    showToast(carouselCompletionMessage(completion), 'success');
+  }
+
   return (
     <Screen>
       <View style={styles.header}>
@@ -260,6 +274,25 @@ function CreatorEditorView({ initial, seeded }: {
           onDuplicate={actions.duplicateSlide}
           onRemove={actions.removeSlide}
         />
+        {completion.gaps.length ? (
+          <View style={styles.finish}>
+            <View style={styles.finishIcon}>
+              <Ionicons name="sparkles-outline" size={16} color={colors.accent} />
+            </View>
+            <View style={styles.finishCopy}>
+              <AppText variant="label">Finish the carousel</AppText>
+              <AppText variant="caption" muted>{carouselCompletionHint(completion)}</AppText>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Finish the carousel"
+              onPress={finishCarousel}
+              style={({ pressed }) => [styles.finishAction, pressed && styles.finishActionPressed]}
+            >
+              <AppText variant="label" color={colors.accent}>Finish</AppText>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.inspector}>
           <SegmentedTabs options={INSPECTOR_TABS} value={tab} onChange={setTab} />
           {tab === 'content' ? <ContentInspector slide={activeSlide} templateId={activeLayoutId} actions={actions} onChangeLayout={changeLayout} /> : null}
@@ -326,6 +359,11 @@ const styles = StyleSheet.create({
   dirtyDotOn: { backgroundColor: colors.warning },
   scroll: { flex: 1 },
   scrollContent: { gap: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xl },
+  finish: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, borderRadius: radius.medium, padding: spacing.md },
+  finishIcon: { width: 32, height: 32, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(182,156,255,0.12)' },
+  finishCopy: { flex: 1, gap: 2 },
+  finishAction: { minHeight: 36, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.accent, paddingHorizontal: spacing.md, alignItems: 'center', justifyContent: 'center' },
+  finishActionPressed: { opacity: 0.75 },
   inspector: { gap: spacing.lg },
   bottomBar: { flexDirection: 'row', gap: spacing.md, paddingVertical: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   bottomButton: { flex: 1 },

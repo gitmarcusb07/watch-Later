@@ -58,30 +58,44 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 const SEARCH_POPULARITY_TIMEOUT_MS = 3_000;
 
+/**
+ * The Upcoming facet searches deeper than a normal query: unreleased titles
+ * rank where audiences cannot see them yet, so the exact release the user is
+ * hunting often sits several pages down. The longer timeout covers the extra
+ * round-trips on slow connections.
+ */
+const SEARCH_UPCOMING_MAX_PAGES = 4;
+const SEARCH_UPCOMING_TIMEOUT_MS = 6_000;
+
 /** TMDb serves 20 rows per search page. */
 const TMDB_SEARCH_PAGE_SIZE = 20;
 
 /**
- * TMDb search rows for a term, going one page deeper when the first page
- * fills up: common queries push their exact-title releases just past the
- * page edge (searching "king" puts the 2026 release at row 29), and one extra
- * page is a bounded cost that keeps those findable. A short first page
- * already ends the result set, so the second request is skipped.
+ * TMDb search rows for a term, walking up to `maxPages`: common queries push
+ * their exact-title releases just past the page edge (searching "king" puts
+ * the 2026 release at row 29), so a bounded page walk keeps those findable.
+ * A short page already ends the result set and stops the walk early; pages
+ * past the first are best-effort — a failure keeps the rows already found.
  */
-async function tmdbSearchRows<T extends { id?: number }>(run: (page: number) => Promise<{ results?: T[] }>): Promise<T[]> {
-  const first = await run(1);
-  const rows = [...(first.results ?? [])];
-  if (rows.length < TMDB_SEARCH_PAGE_SIZE) return rows;
-  try {
-    const second = await run(2);
-    const seen = new Set(rows.map((row) => row.id));
-    for (const row of second.results ?? []) {
-      if (row.id !== undefined && seen.has(row.id)) continue;
-      if (row.id !== undefined) seen.add(row.id);
+async function tmdbSearchRows<T extends { id?: number }>(run: (page: number) => Promise<{ results?: T[] }>, maxPages: number): Promise<T[]> {
+  const rows: T[] = [];
+  const seen = new Set<number>();
+  for (let page = 1; page <= Math.max(1, maxPages); page += 1) {
+    let results: T[];
+    try {
+      results = (await run(page)).results ?? [];
+    } catch (error) {
+      if (page === 1) throw error;
+      break;
+    }
+    for (const row of results) {
+      if (row.id !== undefined) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+      }
       rows.push(row);
     }
-  } catch {
-    // Page two is best-effort; page one still ranks and fills gaps.
+    if (results.length < TMDB_SEARCH_PAGE_SIZE) break;
   }
   return rows;
 }
@@ -94,13 +108,13 @@ async function tmdbSearchRows<T extends { id?: number }>(run: (page: number) => 
  * rate limit, missing key, timeout) yields empty results and ranking falls
  * back to text match.
  */
-async function fetchTmdbSearchSignal(term: string, signal?: AbortSignal): Promise<{ popularity: SearchPopularity; movies: TmdbMovieDto[]; tv: TmdbTvDto[] }> {
+async function fetchTmdbSearchSignal(term: string, signal?: AbortSignal, maxPages = 2, timeoutMs = SEARCH_POPULARITY_TIMEOUT_MS): Promise<{ popularity: SearchPopularity; movies: TmdbMovieDto[]; tv: TmdbTvDto[] }> {
   if (!getTmdbApiKey()) return { popularity: new Map(), movies: [], tv: [] };
   try {
     const [movies, tv] = await withTimeout(Promise.all([
-      tmdbSearchRows((page) => tmdbClient.searchMovies(term, signal, page)),
-      tmdbSearchRows((page) => tmdbClient.searchTv(term, signal, page)),
-    ]), SEARCH_POPULARITY_TIMEOUT_MS);
+      tmdbSearchRows((page) => tmdbClient.searchMovies(term, signal, page), maxPages),
+      tmdbSearchRows((page) => tmdbClient.searchTv(term, signal, page), maxPages),
+    ]), timeoutMs);
     const popularity = new Map<string, number>();
     const record = (title: string | undefined, score: number | undefined) => {
       if (!title || typeof score !== 'number' || !Number.isFinite(score)) return;
@@ -347,6 +361,16 @@ const FLOP_HINDI_SHOW_MIN_VOTES = 40;
 const FLOP_ANIME_MIN_POPULARITY = 5_000;
 /** "New" rail window — the same rolling quarter the home shelf uses. */
 const NEW_RELEASE_WINDOW_DAYS = 90;
+/**
+ * Page budgets for the upcoming feeds (the Upcoming screen walks every feed
+ * to its end in the background). TMDb's theatrical slate runs about seven
+ * pages and its future-series discover list twenty-five; AniList reports 250
+ * pages of unreleased anime, so the walk stops at the 500 most popular
+ * instead of fetching thousands of rows nobody scrolls to.
+ */
+const UPCOMING_MOVIES_MAX_PAGES = 10;
+const UPCOMING_SERIES_MAX_PAGES = 25;
+const UPCOMING_ANIME_MAX_PAGES = 25;
 
 export class RemoteCatalogRepository implements CatalogRepositoryContract {
   async search(query: string, filter: CatalogFilter, signal?: AbortSignal): Promise<CatalogSearchResult> {
@@ -370,13 +394,27 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     if (wantsEveryType || filter === 'series') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'series') });
     if (wantsEveryType || filter === 'anime') tasks.push({ provider: 'tvdb', load: async () => (await tvdbClient.search(term, 'series', signal)).map(mapTvdbSearchItem).filter((item): item is CatalogMedia => keepTitle(item) && item.mediaType === 'anime') });
     // The TMDb search runs in parallel with TVDB: it ranks the merged list,
-    // and its rows fill gaps TVDB has no record of (upcoming releases).
-    const tmdbSignal = fetchTmdbSearchSignal(term, signal);
+    // and its rows fill gaps TVDB has no record of (upcoming releases), which
+    // is why the upcoming facet walks deeper pages.
+    const tmdbSignal = fetchTmdbSearchSignal(
+      term,
+      signal,
+      upcomingOnly ? SEARCH_UPCOMING_MAX_PAGES : 2,
+      upcomingOnly ? SEARCH_UPCOMING_TIMEOUT_MS : SEARCH_POPULARITY_TIMEOUT_MS,
+    );
+    // AniList's own search joins for anime (and every-type queries): TVDB's
+    // anime coverage misses unreleased entries entirely, and AniList titles
+    // are English-first. Best-effort, exactly like the TMDb gap fill.
+    const animeSignal = wantsEveryType || filter === 'anime'
+      ? withTimeout(anilistClient.searchAnime(term, signal), SEARCH_POPULARITY_TIMEOUT_MS)
+        .then((items) => items.map(mapAniListAnime).filter(keepTitle))
+        .catch(() => [] as CatalogMedia[])
+      : Promise.resolve([] as CatalogMedia[]);
     const settled = await Promise.allSettled(tasks.map((task) => task.load()));
     if (signal?.aborted) throw settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
     const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
     const unavailableProviders = [...new Set(settled.flatMap((result, index) => result.status === 'rejected' ? [tasks[index].provider] : []))];
-    const fallback = await tmdbSignal;
+    const [fallback, animeItems] = await Promise.all([tmdbSignal, animeSignal]);
     const tvdbItems = fulfilled.flat();
     // Gap dedupe keeps TVDB the source of record (title + kind + era): the
     // same title from the same era is the same release, while a distant year
@@ -400,6 +438,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     const groups: CatalogMedia[][] = [tvdbItems];
     if (wantsEveryType || filter === 'movies') groups.push(gapOnly(fallback.movies.map(mapTmdbMovie)));
     if (wantsEveryType || filter === 'series') groups.push(gapOnly(fallback.tv.map(mapTmdbTv)));
+    if (wantsEveryType || filter === 'anime') groups.push(gapOnly(animeItems));
     const merged = mergeCatalogResults(groups);
     const visible = upcomingOnly ? merged.filter((item) => isUpcomingMedia(item)) : merged;
     if (!visible.length) {
@@ -889,8 +928,8 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
   }
 
   /** Cap so runaway scrolling can never loop the provider. */
-  private static maxPages(totalPages: number | undefined): number {
-    return Math.max(1, Math.min(totalPages ?? 1, 20));
+  private static maxPages(totalPages: number | undefined, cap = 20): number {
+    return Math.max(1, Math.min(totalPages ?? 1, cap));
   }
 
   /** TVDB filter pages hold 500 rows; the app consumes them in shelf-sized slices. */
@@ -1090,30 +1129,22 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     return {
       items,
       page: safePage,
-      totalPages: RemoteCatalogRepository.maxPages(Math.max(...fulfilled.map((response) => response.total_pages ?? 1))),
+      totalPages: RemoteCatalogRepository.maxPages(Math.max(...fulfilled.map((response) => response.total_pages ?? 1)), UPCOMING_MOVIES_MAX_PAGES),
     };
   }
 
   /**
-   * Upcoming series: TMDB titles starting today or later — Hollywood and
-   * Bollywood premieres in one oldest-first list. The device region joins in
-   * when it is neither US nor IN, mirroring the movies slate.
+   * Upcoming series: TMDb titles starting today or later, oldest first. The
+   * region parameter is accepted for signature parity with the movies slate
+   * but ignored: probe-verified, TMDb's discover list returns identical rows
+   * for US, IN, and unset, so one request replaces the old US + IN pair.
    */
   async getUpcomingSeriesPage(page: number, region?: string, signal?: AbortSignal): Promise<PagedCatalog> {
     const safePage = Math.max(1, Math.floor(page) || 1);
-    const regions = ['US', 'IN', ...(region && region !== 'US' && region !== 'IN' ? [region] : [])];
-    const settled = await Promise.allSettled(
-      regions.map((code) => tmdbClient.upcomingTvSeries(safePage, code, signal)),
-    );
-    const fulfilled = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
-    if (!fulfilled.length) {
-      const reason = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
-      if (reason instanceof Error) throw reason;
-      throw new CatalogError('tmdb', 'network');
-    }
+    void region;
+    const response = await tmdbClient.upcomingTvSeries(safePage, undefined, signal);
     const seen = new Set<string>();
-    const items = fulfilled
-      .flatMap((response) => response.results ?? [])
+    const items = (response.results ?? [])
       .map(mapTmdbTv)
       .filter((item) => {
         if (seen.has(item.id)) return false;
@@ -1124,7 +1155,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     return {
       items,
       page: safePage,
-      totalPages: RemoteCatalogRepository.maxPages(Math.max(...fulfilled.map((response) => response.total_pages ?? 1))),
+      totalPages: RemoteCatalogRepository.maxPages(response.total_pages ?? 1, UPCOMING_SERIES_MAX_PAGES),
     };
   }
 
@@ -1139,7 +1170,10 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     return {
       items,
       page: safePage,
-      totalPages: response.lastPage ?? (response.hasNextPage ? safePage + 1 : safePage),
+      totalPages: RemoteCatalogRepository.maxPages(
+        response.lastPage ?? (response.hasNextPage ? safePage + 1 : safePage),
+        UPCOMING_ANIME_MAX_PAGES,
+      ),
     };
   }
 

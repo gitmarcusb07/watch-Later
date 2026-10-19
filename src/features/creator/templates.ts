@@ -261,3 +261,13 @@ export function collectionTitleStats(slides: readonly CreatorSlide[]): CreatorCo
 export function templateHighlightsDates(id: CreatorTemplateId): boolean {
   return id === 'upcoming-releases';
 }
+
+/**
+ * True when a layout already presents its picks as a scannable list or grid
+ * (rows, ranked rows, collection grid, dated list). The carousel completion
+ * counts picks on these layouts as listed — picks living in covers,
+ * spotlights, or comparisons are the ones a "full list" slide still owes.
+ */
+export function templateListsTitles(id: CreatorTemplateId): boolean {
+  return id === 'stacked-ranking' || id === 'top5' || id === 'watchlist-collection' || id === 'upcoming-releases';
+}

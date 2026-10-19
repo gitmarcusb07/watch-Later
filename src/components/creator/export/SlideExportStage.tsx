@@ -1,21 +1,24 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import type { CreatorProjectData, CreatorTemplateId } from '@/domain/models/creator';
-import type { ExportSlidePlan } from '@/features/creator/exportPlan';
+import { EXPORT_STAGE_HEIGHT, EXPORT_STAGE_WIDTH, type ExportSlidePlan } from '@/features/creator/exportPlan';
+import { withExportQualityImages } from '@/features/creator/exportImages';
 import { collectionTitleStats, slideLayoutOf, slideRankOffset } from '@/features/creator/templates';
 import { CreatorSlideCanvas } from '@/components/creator/CreatorSlideCanvas';
 
 /**
  * Offscreen capture surface. When an export is requested the stage renders
- * the planned slides at their fixed 360 x 450 authoring size, waits for poster
- * images to reach the cache (bounded — a broken image must never block an
- * export), and captures each slide at 1080 x 1350 through
- * `react-native-view-shot`. The stage sits underneath the screen chrome, so
- * it is laid out, drawn, and capture-able but never visible.
+ * the planned slides at 2x the 360 x 450 authoring size (720 x 900, see
+ * `EXPORT_RENDER_SCALE`) with their artwork upgraded to export resolution
+ * (see `withExportQualityImages`), waits for poster images to reach the cache
+ * (bounded — a broken image must never block an export), and captures each
+ * slide at 1080 x 1350 through `react-native-view-shot`. The stage sits
+ * underneath the screen chrome, so it is laid out, drawn, and capture-able
+ * but never visible.
  */
 
-const IMAGE_WAIT_MS = 900;
+const IMAGE_WAIT_MS = 2500;
 
 export interface CaptureRequest {
   plan: ExportSlidePlan[];
@@ -33,6 +36,10 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
   const [request, setRequest] = useState<CaptureRequest | null>(null);
   const resolver = useRef<{ resolve: (uris: string[]) => void; reject: (error: unknown) => void; onProgress?: (done: number, total: number) => void } | null>(null);
 
+  // The capture surface never renders the saved draft URLs: posters and
+  // backdrops are swapped for their export-resolution variants here.
+  const exportData = useMemo(() => withExportQualityImages(data), [data]);
+
   const capture = useCallback((plan: ExportSlidePlan[], onProgress?: (done: number, total: number) => void) => new Promise<string[]>((resolve, reject) => {
     resolver.current = { resolve, reject, onProgress };
     setRequest({ plan });
@@ -44,7 +51,7 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
     const { resolve, reject, onProgress } = resolver.current;
     let cancelled = false;
 
-    const posterUrls = collectPosterUrls(data, plan);
+    const posterUrls = collectPosterUrls(exportData, plan);
     const prefetch = Promise.all(posterUrls.map((url) => Image.prefetch(url).catch(() => false)));
 
     const settle = () => new Promise<void>((done) => requestAnimationFrame(() => setTimeout(done, 120)));
@@ -76,15 +83,15 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
     });
 
     return () => { cancelled = true; };
-  }, [request, data]);
+  }, [request, exportData]);
 
-  const collection = collectionTitleStats(data.slides);
+  const collection = collectionTitleStats(exportData.slides);
   const node = request ? (
     <View style={styles.stage} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessible={false}>
       {request.plan.map((item) => {
-        const slideIndex = data.slides.findIndex((candidate) => candidate.id === item.slideId);
+        const slideIndex = exportData.slides.findIndex((candidate) => candidate.id === item.slideId);
         if (slideIndex < 0) return null;
-        const slide = data.slides[slideIndex];
+        const slide = exportData.slides[slideIndex];
         return (
           <View
             key={item.slideId}
@@ -99,7 +106,8 @@ export function useSlideExporter(templateId: CreatorTemplateId, data: CreatorPro
               showBranding={data.showBranding}
               branding={data.branding}
               slide={slide}
-              rankOffset={slideRankOffset(data.slides, templateId, slideIndex)}
+              width={EXPORT_STAGE_WIDTH}
+              rankOffset={slideRankOffset(exportData.slides, templateId, slideIndex)}
               collection={slideLayoutOf(slide, templateId) === 'collage-cover' ? collection : undefined}
             />
           </View>
@@ -128,6 +136,6 @@ const styles = StyleSheet.create({
   // Laid out at the top-left of the screen root. The export sheet (a native
   // modal above the app) covers it while capturing. It must stay attached and
   // rendered — hiding it with opacity/display would capture an empty image.
-  stage: { position: 'absolute', top: 0, left: 0, width: 360 },
-  slide: { width: 360, height: 450, marginBottom: 8 },
+  stage: { position: 'absolute', top: 0, left: 0, width: EXPORT_STAGE_WIDTH },
+  slide: { width: EXPORT_STAGE_WIDTH, height: EXPORT_STAGE_HEIGHT, marginBottom: 8 },
 });
