@@ -23,7 +23,7 @@ import {
   type CreatorTheme,
   type CreatorTitleRef,
 } from '@/domain/models/creator';
-import { isCreatorTemplateId } from './templates';
+import { creatorTemplate, isCreatorTemplateId } from './templates';
 
 /**
  * Defensive parsing for everything Creator Studio persists or loads. Drafts
@@ -107,11 +107,14 @@ const SLIDE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** Parses one slide. `fallbackId` covers drafts written before ids existed. */
 export function parseCreatorSlide(value: unknown, fallbackId: string): CreatorSlide | null {
   if (!isRecord(value)) return null;
-  const titleRefs = Array.isArray(value.titleRefs)
-    ? value.titleRefs.map(parseCreatorTitleRef).filter((ref): ref is CreatorTitleRef => ref !== null).slice(0, CREATOR_MAX_TITLES_PER_SLIDE)
-    : [];
   const id = typeof value.id === 'string' && SLIDE_ID.test(value.id) ? value.id : fallbackId;
   const layout = isCreatorTemplateId(value.layout) ? value.layout : undefined;
+  // The taste grid is the one layout that intentionally packs nine tiles;
+  // every other layout stays at the five-pick canvas limit.
+  const maxTitles = layout ? creatorTemplate(layout).maxTitles : CREATOR_MAX_TITLES_PER_SLIDE;
+  const titleRefs = Array.isArray(value.titleRefs)
+    ? value.titleRefs.map(parseCreatorTitleRef).filter((ref): ref is CreatorTitleRef => ref !== null).slice(0, maxTitles)
+    : [];
   return {
     id,
     ...(layout ? { layout } : {}),

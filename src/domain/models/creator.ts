@@ -19,6 +19,7 @@ export const CREATOR_TEMPLATE_IDS = [
   'movie-comparison',
   'watchlist-collection',
   'upcoming-releases',
+  'taste-grid',
 ] as const;
 export type CreatorTemplateId = (typeof CREATOR_TEMPLATE_IDS)[number];
 

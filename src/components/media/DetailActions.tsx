@@ -17,12 +17,21 @@ export interface DetailSecondaryAction {
   accessibilityLabel: string;
 }
 
+export interface DetailExtraAction {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  accessibilityLabel: string;
+}
+
 interface DetailActionsProps {
   primaryLabel: string;
   primaryIcon: keyof typeof Ionicons.glyphMap;
   primaryActive?: boolean;
   primaryBusy?: boolean;
   onPrimary: () => void;
+  /** A shorter partner action beside the primary pill (for example Trailer). */
+  extra?: DetailExtraAction;
   secondary: DetailSecondaryAction[];
 }
 
@@ -89,35 +98,48 @@ function ActionPill({ action }: { action: DetailSecondaryAction }) {
 }
 
 /** Every title action in one compact cluster: full-width primary plus small half-width pills. */
-export function DetailActions({ primaryLabel, primaryIcon, primaryActive, primaryBusy, onPrimary, secondary }: DetailActionsProps) {
+export function DetailActions({ primaryLabel, primaryIcon, primaryActive, primaryBusy, onPrimary, extra, secondary }: DetailActionsProps) {
   const { pressScaleStyle, pressIn, pressOut } = usePressScale(0.98);
   const primaryPop = useActivationPop(primaryActive);
   return (
     <View style={styles.root}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={primaryLabel}
-        accessibilityState={{ disabled: primaryBusy, selected: primaryActive }}
-        onPress={onPrimary}
-        onPressIn={pressIn}
-        onPressOut={pressOut}
-        disabled={primaryBusy}
-        style={({ pressed }) => [styles.primaryWrap, primaryBusy && styles.primaryDisabled, pressed && !primaryBusy && styles.pressed]}
-      >
-        <Animated.View style={[pressScaleStyle, primaryPop]}>
-          <LinearGradient
-            colors={primaryActive ? ['#4ADE80', '#16A34A'] : ['#B45CFF', '#8B3DFF']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.primary}
+      <View style={styles.primaryRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={primaryLabel}
+          accessibilityState={{ disabled: primaryBusy, selected: primaryActive }}
+          onPress={onPrimary}
+          onPressIn={pressIn}
+          onPressOut={pressOut}
+          disabled={primaryBusy}
+          style={({ pressed }) => [styles.primaryWrap, primaryBusy && styles.primaryDisabled, pressed && !primaryBusy && styles.pressed]}
+        >
+          <Animated.View style={[pressScaleStyle, primaryPop]}>
+            <LinearGradient
+              colors={primaryActive ? ['#4ADE80', '#16A34A'] : ['#B45CFF', '#8B3DFF']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.primary}
+            >
+              <Ionicons name={primaryIcon} size={19} color={colors.white} />
+              <AppText variant="button" style={styles.primaryLabel} numberOfLines={1}>
+                {primaryLabel}
+              </AppText>
+            </LinearGradient>
+          </Animated.View>
+        </Pressable>
+        {extra ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={extra.accessibilityLabel}
+            onPress={extra.onPress}
+            style={({ pressed }) => [styles.extra, pressed && styles.pressed]}
           >
-            <Ionicons name={primaryIcon} size={19} color={colors.white} />
-            <AppText variant="button" style={styles.primaryLabel} numberOfLines={1}>
-              {primaryLabel}
-            </AppText>
-          </LinearGradient>
-        </Animated.View>
-      </Pressable>
+            <Ionicons name={extra.icon} size={18} color={colors.textPrimary} />
+            <AppText variant="button" style={styles.extraLabel} numberOfLines={1}>{extra.label}</AppText>
+          </Pressable>
+        ) : null}
+      </View>
       {secondary.length ? (
         <View style={styles.grid}>
           {secondary.map((action) => <ActionPill key={action.id} action={action} />)}
@@ -129,10 +151,13 @@ export function DetailActions({ primaryLabel, primaryIcon, primaryActive, primar
 
 const styles = StyleSheet.create({
   root: { gap: spacing.sm },
-  primaryWrap: { borderRadius: radius.pill, overflow: 'hidden' },
+  primaryRow: { flexDirection: 'row', alignItems: 'stretch', gap: spacing.sm },
+  primaryWrap: { flex: 1, borderRadius: radius.pill, overflow: 'hidden' },
   primaryDisabled: { opacity: 0.75 },
-  primary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, minHeight: 54, paddingHorizontal: spacing.xl },
+  primary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, minHeight: 54, paddingHorizontal: spacing.lg },
   primaryLabel: { color: colors.white },
+  extra: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, minHeight: 54, paddingHorizontal: spacing.lg, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  extraLabel: { color: colors.textPrimary, fontSize: 13 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   pill: { flexBasis: '48%', flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 48, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md },
   pillContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },

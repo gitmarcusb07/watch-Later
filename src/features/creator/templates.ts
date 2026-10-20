@@ -173,6 +173,21 @@ export const CREATOR_TEMPLATES: readonly CreatorTemplateMeta[] = [
     defaultSubtitle: 'Mark your calendar',
     defaultClosing: 'Save these dates',
   },
+  {
+    id: 'taste-grid',
+    name: 'Taste grid',
+    tagline: 'Nine labeled picks in one 3×3 grid',
+    icon: 'grid-outline',
+    kind: 'content',
+    defaultFormat: 'post',
+    minTitles: 1,
+    maxTitles: 9,
+    defaultSlides: 1,
+    maxSlides: CREATOR_MAX_SLIDES,
+    defaultHeadline: 'MY TASTE',
+    defaultSubtitle: 'The nine titles that define me',
+    defaultClosing: 'What does your grid look like?',
+  },
 ] as const;
 
 const TEMPLATE_BY_ID = new Map<CreatorTemplateId, CreatorTemplateMeta>(CREATOR_TEMPLATES.map((template) => [template.id, template]));
@@ -269,5 +284,5 @@ export function templateHighlightsDates(id: CreatorTemplateId): boolean {
  * spotlights, or comparisons are the ones a "full list" slide still owes.
  */
 export function templateListsTitles(id: CreatorTemplateId): boolean {
-  return id === 'stacked-ranking' || id === 'top5' || id === 'watchlist-collection' || id === 'upcoming-releases';
+  return id === 'stacked-ranking' || id === 'top5' || id === 'watchlist-collection' || id === 'upcoming-releases' || id === 'taste-grid';
 }

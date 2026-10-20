@@ -22,7 +22,7 @@ import { buildSeededSlides, titleRefFromHit, titleRefFromMedia } from './titleRe
  * missing — seeds snapshot what exists, they never invent titles or dates.
  */
 
-export const CREATOR_SEED_IDS = ['watchlist', 'trending', 'upcoming', 'hits-month', 'hits-year'] as const;
+export const CREATOR_SEED_IDS = ['watchlist', 'taste', 'trending', 'upcoming', 'hits-month', 'hits-year'] as const;
 export type CreatorSeedId = (typeof CREATOR_SEED_IDS)[number];
 
 export interface CreatorSeedMeta {
@@ -35,6 +35,7 @@ export interface CreatorSeedMeta {
 
 export const CREATOR_SEEDS: readonly CreatorSeedMeta[] = [
   { id: 'watchlist', label: 'Watchlist collection', detail: 'Your saved titles as a carousel', icon: 'bookmark-outline' },
+  { id: 'taste', label: 'Taste grid', detail: 'Nine saved titles as a 3×3 share card', icon: 'grid-outline' },
   { id: 'trending', label: 'Trending top 5', detail: 'What people are watching right now', icon: 'trending-up-outline' },
   { id: 'upcoming', label: 'Upcoming releases', detail: 'Dated releases you can plan for', icon: 'calendar-outline' },
   { id: 'hits-month', label: 'Global Hits · last month', detail: 'Movies and series ranked by popularity', icon: 'globe-outline' },
@@ -58,6 +59,8 @@ export function creatorSeedTarget(seed: CreatorSeedId): CreatorSeedTarget {
   switch (seed) {
     case 'watchlist':
       return { templateId: 'watchlist-collection', format: 'carousel' };
+    case 'taste':
+      return { templateId: 'taste-grid', format: 'post' };
     case 'trending':
       return { templateId: 'top5', format: 'carousel' };
     case 'upcoming':
@@ -70,6 +73,7 @@ export function creatorSeedTarget(seed: CreatorSeedId): CreatorSeedTarget {
 
 /** Bounds per seed so a draft opens instantly and stays editable by hand. */
 export const SEED_MAX_WATCHLIST = 18;
+export const SEED_MAX_TASTE = 9;
 export const SEED_MAX_UPCOMING = 20;
 export const SEED_MAX_HITS_PER_TYPE = 5;
 export const SEED_MAX_TRENDING = 5;
@@ -125,7 +129,7 @@ function useHitsSeed(type: HitsPeriodType, enabled: boolean) {
  * zero-title draft instead of fabricated picks.
  */
 export function useCreatorSeed(seed: CreatorSeedId | undefined): CreatorSeedState {
-  const watchlist = useWatchlist(seed === 'watchlist');
+  const watchlist = useWatchlist(seed === 'watchlist' || seed === 'taste');
   const trending = useTrending(seed === 'trending');
   const upcoming = useUpcomingCatalog(seed === 'upcoming');
   const hitsMonth = useHitsSeed('month', seed === 'hits-month');
@@ -146,6 +150,17 @@ export function useCreatorSeed(seed: CreatorSeedId | undefined): CreatorSeedStat
       groups = [
         (watchlist.data ?? [])
           .slice(0, SEED_MAX_WATCHLIST)
+          .map((entry) => titleRefFromMedia(entry.media)),
+      ];
+      break;
+    }
+    case 'taste': {
+      loading = watchlist.isLoading;
+      if (watchlist.isError) errorMessage = friendlyErrorMessage(watchlist.error);
+      retry = () => void watchlist.refetch();
+      groups = [
+        (watchlist.data ?? [])
+          .slice(0, SEED_MAX_TASTE)
           .map((entry) => titleRefFromMedia(entry.media)),
       ];
       break;

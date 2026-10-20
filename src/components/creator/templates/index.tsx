@@ -10,6 +10,7 @@ import { PagePromoSlide } from './PagePromoSlide';
 import { ComparisonSlide } from './ComparisonSlide';
 import { CollectionGridSlide } from './CollectionGridSlide';
 import { UpcomingSlide } from './UpcomingSlide';
+import { TasteGridSlide } from './TasteGridSlide';
 
 /** Single dispatch point from a template id to its renderer. */
 export function renderSlideTemplate(
@@ -43,5 +44,7 @@ export function renderSlideTemplate(
       return <CollectionGridSlide {...common} />;
     case 'upcoming-releases':
       return <UpcomingSlide {...common} />;
+    case 'taste-grid':
+      return <TasteGridSlide {...common} />;
   }
 }

@@ -106,6 +106,15 @@ export function suggestCaptions(input: CaptionInput): CaptionSuggestion[] {
       });
       suggestions.push({ label: 'Hype post', text: 'These releases are coming for my sleep schedule 📅 Save this so you don’t miss them.' });
       break;
+    case 'taste-grid':
+      suggestions.push({
+        label: 'Taste check',
+        text: count
+          ? `My taste in nine titles. How many overlap with yours? 👀\n\n${numberedLines(refs)}`
+          : 'My taste in nine titles. How many overlap with yours? 👀',
+      });
+      suggestions.push({ label: 'Tag a friend', text: 'Nine slots, nine opinions. Tag someone who needs to make their own grid.' });
+      break;
   }
   return suggestions.filter((suggestion) => suggestion.text.trim().length > 0).slice(0, 3);
 }

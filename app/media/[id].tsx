@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { openURL } from 'expo-linking';
 import { LinearGradient } from 'expo-linear-gradient';
-import { FlatList, Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { FlatList, Image, Pressable, ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppText } from '@/components/common/AppText';
 import { IconButton } from '@/components/buttons/IconButton';
@@ -25,7 +25,7 @@ import { isUpcoming, formatReleaseDate } from '@/features/catalog/upcoming';
 import { finishTitle } from '@/features/watchState/status';
 import { PRIORITY_META } from '@/features/watchState/priority';
 import type { SeriesProgress, WatchPriority } from '@/domain/models/watchState';
-import { useFavoriteMutation, useFavoriteStatus, useMovieWatchedStatus, useSaveToWatchlist, useSeriesProgress, useSeriesTrackingStatus, useTrackedMedia, useWatchlist, useWatchlistStatus, useWatchlistMutation, useMovieWatchedMutation, useSeriesTrackingMutation, watchKeys } from '@/features/watchState/hooks';
+import { useFavoriteMutation, useFavoriteStatus, useMovieWatchedStatus, useSaveToWatchlist, useSeriesProgress, useSeriesTrackingStatus, useTrackedMedia, useWatchlist, useWatchlistStatus, useWatchlistMutation, useMovieWatchedMutation, useSeriesTrackingMutation, useSetUserRating, useUserRating, watchKeys } from '@/features/watchState/hooks';
 import { watchStateRepository } from '@/data/local/repositories/SqliteWatchStateRepository';
 import { scheduleAutoSync } from '@/features/sync/autoSync';
 import { queryClient } from '@/lib/query/queryClient';
@@ -38,6 +38,7 @@ const SHOW_RELEASE_REMINDERS = false;
 export default function MediaDetailScreen() {
   const { id, season: seasonParam } = useLocalSearchParams<{ id: string; season?: string }>();
   const router = useRouter();
+  const { height } = useWindowDimensions();
   const identity = typeof id === 'string' ? parseMediaRouteId(id) : undefined;
   const mediaQuery = useCatalogMedia(identity);
   const localMediaQuery = useTrackedMedia(identity);
@@ -63,6 +64,8 @@ export default function MediaDetailScreen() {
   const creditsQuery = useMediaCredits(identity);
   const contentRatingQuery = useContentRating(identity);
   const enrichment = useTmdbEnrichment(media);
+  const ratingQuery = useUserRating(identity);
+  const ratingMutation = useSetUserRating();
   const [backdropFailed, setBackdropFailed] = useState(false);
   const [posterFailed, setPosterFailed] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
@@ -154,11 +157,12 @@ export default function MediaDetailScreen() {
   const directorCell = directors ? { label: 'Directed By', value: directors }
     : media.mediaType === 'anime' && media.studios?.length ? { label: 'Studio', value: media.studios[0] }
     : undefined;
+  const ageRating = media.contentRating ?? contentRatingQuery.data;
   const infoItems = [
     directorCell,
     { label: 'Country', value: countryName(media.originCountries?.[0]) },
     { label: 'Language', value: languageName(media.language) },
-    { label: 'Age Rating', value: media.contentRating ?? contentRatingQuery.data ?? undefined },
+    { label: 'Age Rating', value: ageRating },
   ].filter((item): item is { label: string; value: string } => Boolean(item?.value)).slice(0, 4);
 
   const primaryBusy = statusBusy || watchedMutation.isPending;
@@ -174,6 +178,20 @@ export default function MediaDetailScreen() {
   const releaseLabel = formatReleaseDate(media.releaseDate);
   const primaryLabel = upcoming ? (releaseLabel ? `Coming ${releaseLabel}` : 'Not released yet') : watched ? 'Watched' : 'Mark as Watched';
   const primaryIcon = watched && !upcoming ? 'eye' as const : upcoming ? 'calendar-outline' as const : 'eye-outline' as const;
+  const userRating = ratingQuery.data?.rating ?? null;
+  const streamProviders = providerGroups.find((group) => group.category === 'stream')?.providers ?? [];
+  const streamingLabel = streamProviders.slice(0, 3).map((provider) => provider.name).join(', ');
+  const statusLabel = upcoming
+    ? 'Coming soon'
+    : media.mediaType === 'movie'
+      ? watched ? 'Watched' : 'Not watched'
+      : watched
+        ? `Completed${progress?.totalEpisodeCount ? ` · ${progress.totalEpisodeCount} episodes` : ''}`
+        : progress
+          ? `Watching · ${progress.watchedEpisodeCount}${progress.totalEpisodeCount ? `/${progress.totalEpisodeCount}` : ''} episodes`
+          : trackingStatus.data ? 'Tracking' : 'Not started';
+  const statusColor = upcoming ? colors.warning : watched ? colors.success : trackingStatus.data ? colors.accent : colors.textMuted;
+  const heroHeight = Math.min(560, Math.max(400, height * 0.58));
 
   function handlePrimary() {
     if (!media || primaryBusy || upcoming) return;
@@ -217,84 +235,133 @@ export default function MediaDetailScreen() {
     });
   }
 
+  function toggleFavorite() {
+    triggerLightHaptic();
+    favoriteMutation.mutate(undefined, {
+      onSuccess: () => { triggerSuccessHaptic(); if (!favoriteStatus.data) showToast('Added to favorites', 'success'); },
+      onError: (error) => void showDialog({ type: 'error', title: 'Couldn’t update favorites', message: friendlyErrorMessage(error) }),
+    });
+  }
+
+  function handleRate(star: number) {
+    if (ratingMutation.isPending) return;
+    triggerLightHaptic();
+    ratingMutation.mutate({ media: actionMedia, rating: star * 2, thumbs: 0 }, {
+      onSuccess: () => triggerSuccessHaptic(),
+      onError: (error) => void showDialog({ type: 'error', title: 'Couldn’t save your rating', message: friendlyErrorMessage(error) }),
+    });
+  }
+
+  function clearRating() {
+    if (ratingMutation.isPending) return;
+    triggerLightHaptic();
+    ratingMutation.mutate({ media: actionMedia, rating: null, thumbs: 0 }, {
+      onError: (error) => void showDialog({ type: 'error', title: 'Couldn’t clear your rating', message: friendlyErrorMessage(error) }),
+    });
+  }
+
+  function shareTitle() {
+    if (!media) return;
+    triggerLightHaptic();
+    const message = `${media.title}${media.year ? ` (${media.year})` : ''} — ${kindLabel}${typeof score === 'number' ? ` · ${score.toFixed(1)}/10` : ''}. Track it on Watch Later.`;
+    void Share.share({ message }).catch(() => undefined);
+  }
+
   return <Screen><ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
-    <View style={styles.hero}>
+    <View style={[styles.hero, { height: heroHeight }]}>
       <LinearGradient colors={['#241D33', colors.background]} style={StyleSheet.absoluteFill} />
-      {media.backdropUrl && !backdropFailed ? <Image source={{ uri: media.backdropUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => setBackdropFailed(true)} /> : null}
-      <View style={styles.heroScrim} />
-      <View style={styles.heroTop}><IconButton name="arrow-back" label="Go back" onPress={() => router.back()} /></View>
+      {media.backdropUrl && !backdropFailed
+        ? <Image source={{ uri: media.backdropUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => setBackdropFailed(true)} />
+        : media.posterUrl && !posterFailed
+          ? <Image source={{ uri: media.posterUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => setPosterFailed(true)} />
+          : null}
+      <LinearGradient
+        colors={['rgba(5,6,10,0.80)', 'rgba(5,6,10,0.08)', 'rgba(5,6,10,0.97)']}
+        locations={[0, 0.42, 1]}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={styles.heroTop}>
+        <IconButton name="arrow-back" label="Go back" onPress={() => router.back()} />
+        <View style={styles.heroTopActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={favoriteStatus.data ? 'Remove from favorites' : 'Add to favorites'}
+            accessibilityState={{ selected: favoriteStatus.data ?? false, disabled: favoriteMutation.isPending }}
+            disabled={favoriteMutation.isPending}
+            onPress={toggleFavorite}
+            style={({ pressed }) => [styles.heroAction, pressed && styles.pressed]}
+          >
+            <Ionicons name={favoriteStatus.data ? 'heart' : 'heart-outline'} size={19} color={favoriteStatus.data ? colors.error : colors.white} />
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Share this title" onPress={shareTitle} style={({ pressed }) => [styles.heroAction, pressed && styles.pressed]}>
+            <Ionicons name="share-outline" size={19} color={colors.white} />
+          </Pressable>
+        </View>
+      </View>
       {trailerKey ? (
         <Pressable accessibilityRole="button" accessibilityLabel="Play trailer" onPress={() => void openURL(`https://www.youtube.com/watch?v=${trailerKey}`)} style={({ pressed }) => [styles.playButton, pressed && styles.playPressed]}>
           <Ionicons name="play" size={28} color={colors.white} />
         </Pressable>
       ) : null}
       <View style={styles.heroBottom}>
-        {media.posterUrl && !posterFailed ? <Image source={{ uri: media.posterUrl }} style={styles.poster} resizeMode="cover" onError={() => setPosterFailed(true)} /> : <View style={[styles.poster, styles.posterFallback]}><Ionicons name="film-outline" size={24} color={colors.accent} /></View>}
-        <View style={styles.heroTitle}>
-          <AppText variant="bodySmall" muted>{headingMeta}</AppText>
-          <AppText variant="heading1" style={styles.title}>{media.title}</AppText>
-          {typeof score === 'number' ? <View style={styles.ratingRow} accessibilityRole="text" accessibilityLabel={`Rated ${score.toFixed(1)} out of 10${typeof scoreVotes === 'number' ? ` from ${scoreVotes} votes` : ''}`}><Ionicons name="star" size={13} color={colors.accent} /><AppText variant="bodySmall" style={styles.ratingText}>{score.toFixed(1)}</AppText>{typeof scoreVotes === 'number' ? <AppText variant="caption" muted>({scoreVotes >= 1000000 ? `${(scoreVotes / 1000000).toFixed(1)}M` : scoreVotes >= 1000 ? `${(scoreVotes / 1000).toFixed(1)}k` : `${scoreVotes}`})</AppText> : null}</View> : null}
-          <AppText variant="caption" style={styles.kind}>{media.provider === 'tmdb' ? 'TMDb' : media.provider === 'tvdb' ? 'TVDB' : 'ANILIST'}</AppText>
+        <View style={styles.heroStatusRow}>
+          <View style={styles.statusPill}><View style={[styles.statusDot, { backgroundColor: statusColor }]} /><AppText variant="caption" style={styles.statusText}>{statusLabel}</AppText></View>
+          <AppText variant="caption" muted numberOfLines={1} style={styles.heroMeta}>{headingMeta}</AppText>
+        </View>
+        <AppText style={styles.heroTitle} numberOfLines={3}>{media.title}</AppText>
+        <View style={styles.heroMetaRow}>
+          {typeof score === 'number' ? <View style={styles.scorePill} accessibilityRole="text" accessibilityLabel={`Rated ${score.toFixed(1)} out of 10${typeof scoreVotes === 'number' ? ` from ${scoreVotes} votes` : ''}`}><Ionicons name="star" size={13} color={colors.accent} /><AppText variant="bodySmall" style={styles.scoreText}>{score.toFixed(1)}</AppText>{typeof scoreVotes === 'number' ? <AppText variant="caption" muted>({scoreVotes >= 1000000 ? `${(scoreVotes / 1000000).toFixed(1)}M` : scoreVotes >= 1000 ? `${(scoreVotes / 1000).toFixed(1)}k` : `${scoreVotes}`})</AppText> : null}</View> : null}
+          {ageRating ? <View style={styles.agePill}><AppText variant="caption" style={styles.ageText}>{ageRating}</AppText></View> : null}
+          {streamingLabel ? <View style={styles.streamingRow}><Ionicons name="play-circle-outline" size={14} color={colors.textSecondary} /><AppText variant="caption" muted numberOfLines={1} style={styles.streamingText}>Streaming on {streamingLabel}</AppText></View> : null}
         </View>
       </View>
     </View>
     <FadeInView style={styles.body}>
-      {infoItems.length ? (
-        <View style={styles.infoGrid}>
-          {infoItems.map((item) => (
-            <View key={item.label} style={styles.infoCell}>
-              <AppText variant="caption" muted>{item.label}</AppText>
-              <AppText variant="bodyMedium" style={styles.infoValue} numberOfLines={1}>{item.value}</AppText>
-            </View>
-          ))}
-        </View>
-      ) : null}
-      {upcoming ? <><View style={styles.messageCard}><Ionicons name="calendar-outline" size={19} color={colors.accent} /><AppText variant="bodySmall" muted style={styles.messageText}>Releases{releaseLabel ? ` ${releaseLabel}` : ' soon'} — save it to your Watchlist, then mark it watched after release.</AppText></View>{SHOW_RELEASE_REMINDERS ? <NotifyMeButton media={media} /> : null}</> : null}
-      <DetailActions
-        primaryLabel={primaryLabel}
-        primaryIcon={primaryIcon}
-        primaryActive={watched && !upcoming}
-        primaryBusy={primaryBusy || upcoming}
-        onPrimary={handlePrimary}
-        secondary={[
-          {
-            id: 'watch-later',
-            label: watchlistStatus.data ? (savedPriority ? PRIORITY_META[savedPriority].label : 'Watchlisted') : 'Watch Later',
-            icon: 'time-outline',
-            activeIcon: 'checkmark',
-            active: watchlistStatus.data ?? false,
-            busy: watchlistStatus.isLoading || watchlistMutation.isPending || saveToWatchlistMutation.isPending,
-            onPress: () => { triggerLightHaptic(); setSheetOpen(true); },
-            accessibilityLabel: 'Open watch later options',
-          },
-          {
-            id: 'favorite',
-            label: 'Favorite',
-            icon: 'heart-outline',
-            activeIcon: 'heart',
-            active: favoriteStatus.data ?? false,
-            busy: favoriteStatus.isLoading || favoriteMutation.isPending,
-            onPress: () => { triggerLightHaptic(); favoriteMutation.mutate(undefined, {
-              onSuccess: () => { triggerSuccessHaptic(); if (!favoriteStatus.data) showToast('Added to favorites', 'success'); },
-              onError: (error) => void showDialog({ type: 'error', title: 'Couldn’t update favorites', message: friendlyErrorMessage(error) }),
-            }); },
-            accessibilityLabel: favoriteStatus.data ? 'Remove from favorites' : 'Add to favorites',
-          },
-          ...(episodic && !watched ? [{
-            id: 'tracking',
-            label: trackingStatus.data ? 'Tracking' : 'Track Show',
-            icon: 'play-outline' as const,
-            activeIcon: 'pause-circle' as const,
-            active: trackingStatus.data ?? false,
-            busy: trackingStatus.isLoading || trackingMutation.isPending,
-            onPress: () => { triggerLightHaptic(); trackingMutation.mutate(undefined, {
-              onSuccess: () => { triggerSuccessHaptic(); showToast(trackingStatus.data ? 'Stopped tracking' : 'Tracking started', 'info'); },
-              onError: (error: unknown) => void showDialog({ type: 'error', title: 'Couldn’t update tracking', message: friendlyErrorMessage(error) }),
-            }); },
-            accessibilityLabel: trackingStatus.data ? 'Stop tracking this show' : 'Start tracking this show',
-          }] : []),
-        ]}
-      />
+      <View style={styles.actionCard}>
+        <DetailActions
+          primaryLabel={primaryLabel}
+          primaryIcon={primaryIcon}
+          primaryActive={watched && !upcoming}
+          primaryBusy={primaryBusy || upcoming}
+          onPrimary={handlePrimary}
+          extra={trailerKey ? { label: 'Trailer', icon: 'play', onPress: () => void openURL(`https://www.youtube.com/watch?v=${trailerKey}`), accessibilityLabel: 'Play trailer' } : undefined}
+          secondary={[
+            {
+              id: 'watch-later',
+              label: watchlistStatus.data ? (savedPriority ? PRIORITY_META[savedPriority].label : 'Watchlisted') : 'Watch Later',
+              icon: 'time-outline',
+              activeIcon: 'checkmark',
+              active: watchlistStatus.data ?? false,
+              busy: watchlistStatus.isLoading || watchlistMutation.isPending || saveToWatchlistMutation.isPending,
+              onPress: () => { triggerLightHaptic(); setSheetOpen(true); },
+              accessibilityLabel: 'Open watch later options',
+            },
+            {
+              id: 'favorite',
+              label: 'Favorite',
+              icon: 'heart-outline',
+              activeIcon: 'heart',
+              active: favoriteStatus.data ?? false,
+              busy: favoriteStatus.isLoading || favoriteMutation.isPending,
+              onPress: toggleFavorite,
+              accessibilityLabel: favoriteStatus.data ? 'Remove from favorites' : 'Add to favorites',
+            },
+            ...(episodic && !watched ? [{
+              id: 'tracking',
+              label: trackingStatus.data ? 'Tracking' : 'Track Show',
+              icon: 'play-outline' as const,
+              activeIcon: 'pause-circle' as const,
+              active: trackingStatus.data ?? false,
+              busy: trackingStatus.isLoading || trackingMutation.isPending,
+              onPress: () => { triggerLightHaptic(); trackingMutation.mutate(undefined, {
+                onSuccess: () => { triggerSuccessHaptic(); showToast(trackingStatus.data ? 'Stopped tracking' : 'Tracking started', 'info'); },
+                onError: (error: unknown) => void showDialog({ type: 'error', title: 'Couldn’t update tracking', message: friendlyErrorMessage(error) }),
+              }); },
+              accessibilityLabel: trackingStatus.data ? 'Stop tracking this show' : 'Start tracking this show',
+            }] : []),
+          ]}
+        />
+      </View>
       <WatchLaterSheet
         visible={sheetOpen}
         saved={watchlistStatus.data ?? false}
@@ -304,9 +371,53 @@ export default function MediaDetailScreen() {
         onRemove={handleRemoveFromWatchlist}
         onClose={() => setSheetOpen(false)}
       />
-      {progress && episodic ? <AppText variant="caption" muted>{progress.watchedEpisodeCount} watched{progress.totalEpisodeCount ? ` / ${progress.totalEpisodeCount} known episodes` : progress.cachedEpisodeCount ? ` / ${progress.cachedEpisodeCount} loaded episodes` : ''}</AppText> : null}
-      <View style={styles.section}><AppText variant="heading3">Overview</AppText><AppText variant="bodySmall" muted style={styles.overview}>{media.overview || 'Overview is not available for this title.'}</AppText>{genres.length ? <View style={styles.tags}>{genres.map((genre) => <View key={genre} style={styles.tag}><AppText variant="bodySmall" style={styles.tagText}>{genre}</AppText></View>)}</View> : null}</View>
-      {trailerKey || media.imdbId ? <View style={styles.extras}>{trailerKey ? <AppButton variant="secondary" label="Watch trailer" icon={<Ionicons name="play" size={16} color={colors.accent} />} onPress={() => void openURL(`https://www.youtube.com/watch?v=${trailerKey}`)} /> : null}{media.imdbId ? <AppButton variant="text" label="Open IMDb" onPress={() => void openURL(`https://www.imdb.com/title/${media.imdbId}/`)} /> : null}</View> : null}
+      <View style={styles.ratingCard}>
+        <View style={styles.ratingHeader}>
+          <View style={styles.ratingCopy}>
+            <AppText style={styles.ratingKicker}>YOUR RATING</AppText>
+            <AppText variant="bodyMedium">{userRating ? `${(userRating / 2).toFixed(1)} / 5` : 'Tap a star to rate'}</AppText>
+          </View>
+          {userRating ? <Pressable accessibilityRole="button" accessibilityLabel="Clear your rating" onPress={clearRating} hitSlop={8}><AppText variant="caption" style={styles.clearRating}>Clear</AppText></Pressable> : null}
+        </View>
+        <View style={styles.ratingStars} accessibilityRole="radiogroup" accessibilityLabel="Your rating">
+          {[1, 2, 3, 4, 5].map((star) => {
+            const full = userRating !== null && userRating >= star * 2;
+            const half = userRating !== null && userRating >= star * 2 - 1;
+            return (
+              <Pressable key={star} accessibilityRole="radio" accessibilityLabel={`${star} out of 5 stars`} accessibilityState={{ selected: full }} onPress={() => handleRate(star)} hitSlop={6} disabled={ratingMutation.isPending}>
+                <Ionicons name={full ? 'star' : half ? 'star-half' : 'star-outline'} size={28} color={full || half ? colors.accent : colors.textMuted} />
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+      {genres.length ? <View style={styles.genreRow}>{genres.map((genre) => <View key={genre} style={styles.genreChip}><AppText variant="caption" style={styles.genreText}>{genre}</AppText></View>)}</View> : null}
+      {upcoming ? <><View style={styles.messageCard}><Ionicons name="calendar-outline" size={19} color={colors.accent} /><AppText variant="bodySmall" muted style={styles.messageText}>Releases{releaseLabel ? ` ${releaseLabel}` : ' soon'} — save it to your Watchlist, then mark it watched after release.</AppText></View>{SHOW_RELEASE_REMINDERS ? <NotifyMeButton media={media} /> : null}</> : null}
+      {infoItems.length ? (
+        <View style={styles.infoGrid}>
+          {infoItems.map((item) => (
+            <View key={item.label} style={styles.infoCell}>
+              <AppText variant="caption" muted style={styles.infoLabel}>{item.label}</AppText>
+              <AppText variant="bodyMedium" style={styles.infoValue} numberOfLines={2}>{item.value}</AppText>
+            </View>
+          ))}
+        </View>
+      ) : null}
+      {progress && episodic ? <View style={styles.progressCard}>
+        <View style={styles.progressTop}><AppText style={styles.progressKicker}>YOUR PROGRESS</AppText><AppText variant="caption" muted>{progress.watchedEpisodeCount}{progress.totalEpisodeCount ? ` / ${progress.totalEpisodeCount}` : ''} episodes</AppText></View>
+        <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.round(Math.max(0, Math.min(1, progress.progress)) * 100)}%` }]} /></View>
+        {progress.nextEpisode ? <AppText variant="caption" muted style={styles.progressNext}>Up next · S{progress.nextEpisode.seasonNumber} E{progress.nextEpisode.episodeNumber} · {progress.nextEpisode.title}</AppText> : null}
+      </View> : null}
+      <View style={styles.overviewRow}>
+        {media.posterUrl && !posterFailed
+          ? <Image source={{ uri: media.posterUrl }} style={styles.overviewPoster} resizeMode="cover" onError={() => setPosterFailed(true)} />
+          : <View style={[styles.overviewPoster, styles.posterFallback]}><Ionicons name="film-outline" size={26} color={colors.accent} /></View>}
+        <View style={styles.overviewCopy}>
+          <AppText variant="heading3">Overview</AppText>
+          <AppText variant="bodySmall" muted style={styles.overview}>{media.overview || 'Overview is not available for this title.'}</AppText>
+        </View>
+      </View>
+      {media.imdbId ? <View style={styles.extras}><AppButton variant="secondary" label="Open IMDb" icon={<Ionicons name="open-outline" size={16} color={colors.accent} />} onPress={() => void openURL(`https://www.imdb.com/title/${media.imdbId}/`)} /></View> : null}
       {media.cast?.length ? <View style={styles.section}><AppText variant="heading3">Top cast</AppText><FlatList horizontal data={media.cast.slice(0, 12)} keyExtractor={(item, index) => `${item.name}-${index}`} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.castRow} renderItem={({ item }) => (
         <View style={styles.castCard} accessibilityRole="text" accessibilityLabel={`${item.name}${item.character ? ` as ${item.character}` : ''}`}>
           {item.imageUrl ? <Image source={{ uri: item.imageUrl }} style={styles.castPhoto} resizeMode="cover" /> : <View style={[styles.castPhoto, styles.castFallback]}><Ionicons name="person-outline" size={20} color={colors.textMuted} /></View>}
@@ -316,7 +427,6 @@ export default function MediaDetailScreen() {
       )} /></View> : null}
       {providerGroups.length ? <View style={styles.section}><AppText variant="heading3" style={styles.seasonHeading}>Where to watch</AppText>{providerGroups.map((group) => <View key={group.category} style={styles.providerGroup}><AppText variant="caption" muted style={styles.providerCategory}>{group.category === 'stream' ? 'Stream' : group.category === 'rent' ? 'Rent' : 'Buy'}</AppText><View style={styles.providerRow}>{group.providers.map((provider) => <View key={provider.id} style={styles.provider} accessibilityRole="image" accessibilityLabel={provider.name}>{provider.logoUrl ? <Image source={{ uri: provider.logoUrl }} style={styles.providerLogo} resizeMode="cover" /> : <AppText variant="caption">{provider.name.slice(0, 2).toUpperCase()}</AppText>}</View>)}</View></View>)}</View> : null}
       {episodic ? <View style={styles.section}><AppText variant="heading3" style={styles.seasonHeading}>Seasons & episodes</AppText>
-        {progress?.nextEpisode ? <View style={styles.messageCard}><Ionicons name="play-circle-outline" size={19} color={colors.accent} /><AppText variant="bodySmall" muted style={styles.messageText}>Up next: S{progress.nextEpisode.seasonNumber} E{progress.nextEpisode.episodeNumber} · {progress.nextEpisode.title}</AppText></View> : null}
         <SeasonsSection media={media} progress={progress} initialSeasonNumber={routeSeason} />
       </View> : null}
       {media.studios?.length ? <View style={styles.section}><AppText variant="heading3">Studios</AppText><AppText variant="bodySmall" muted style={styles.overview}>{media.studios.join(' · ')}</AppText></View> : null}
@@ -324,4 +434,69 @@ export default function MediaDetailScreen() {
   </ScrollView></Screen>;
 }
 
-const styles = StyleSheet.create({ center: { flex: 1 }, scroll: { paddingBottom: spacing['2xl'] }, hero: { height: 380, marginHorizontal: -spacing.xl, padding: spacing.xl, justifyContent: 'space-between', overflow: 'hidden', backgroundColor: colors.surface }, heroScrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(5,6,10,0.45)' }, heroTop: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.sm }, playButton: { position: 'absolute', top: '42%', left: '50%', marginLeft: -28, width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(10,10,12,0.55)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center' }, playPressed: { opacity: 0.8 }, heroBottom: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.md }, poster: { width: 110, height: 160, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', backgroundColor: colors.surfaceElevated }, posterFallback: { alignItems: 'center', justifyContent: 'center' }, heroTitle: { flex: 1, gap: spacing.xs, paddingBottom: spacing.sm }, title: { color: colors.white }, kind: { color: colors.textMuted, letterSpacing: 1.4 }, body: { paddingTop: spacing.lg, gap: spacing.md }, infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.sm }, infoCell: { flexBasis: '47%', flexGrow: 1, gap: 2 }, infoValue: { color: colors.white }, metadata: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.lg, flexWrap: 'wrap' }, rating: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: colors.surfaceElevated, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.pill }, section: { marginTop: spacing['2xl'] }, overview: { marginTop: spacing.md, lineHeight: 23 }, tags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.lg }, tag: { backgroundColor: colors.surfaceElevated, borderRadius: 12, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm }, tagText: { color: colors.textPrimary }, seasonHeading: { marginBottom: spacing.md }, seasonOptions: { marginBottom: spacing.md }, seasonActions: { gap: spacing.sm, marginBottom: spacing.md }, trackingActions: { gap: spacing.sm }, seasonLoading: { height: 120 }, seasonError: { minHeight: 150 }, noEpisodes: { minHeight: 200 }, messageCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.medium, padding: spacing.lg, backgroundColor: colors.surface }, messageText: { flex: 1 }, extras: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }, providerGroup: { gap: spacing.sm, marginTop: spacing.md }, providerCategory: { letterSpacing: 1 }, providerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }, provider: { width: 46, height: 46, borderRadius: radius.small, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, providerLogo: { width: 44, height: 44, borderRadius: radius.small }, ratingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs }, ratingText: { color: colors.white }, castRow: { gap: spacing.md, paddingRight: spacing.xl, marginTop: spacing.md }, castCard: { width: 84, gap: spacing.xs }, castPhoto: { width: 84, height: 84, borderRadius: 42, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border }, castFallback: { alignItems: 'center', justifyContent: 'center' }, castName: { color: colors.white } });
+const styles = StyleSheet.create({
+  center: { flex: 1 },
+  scroll: { paddingBottom: spacing['2xl'] },
+  hero: { marginHorizontal: -spacing.xl, paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing['3xl'], justifyContent: 'space-between', overflow: 'hidden', backgroundColor: colors.surface },
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm },
+  heroTopActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  heroAction: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(10,10,12,0.55)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.20)' },
+  pressed: { opacity: 0.78 },
+  playButton: { position: 'absolute', top: '40%', left: '50%', marginLeft: -30, width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(10,10,12,0.58)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)', alignItems: 'center', justifyContent: 'center' },
+  playPressed: { opacity: 0.8 },
+  heroBottom: { gap: spacing.sm },
+  heroStatusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, backgroundColor: 'rgba(8,6,14,0.62)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)' },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusText: { color: colors.white, fontWeight: '600' },
+  heroMeta: { flexShrink: 1 },
+  heroTitle: { color: colors.white, fontSize: 38, lineHeight: 42, fontWeight: '800', letterSpacing: -1.1 },
+  heroMetaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+  scorePill: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, backgroundColor: 'rgba(8,6,14,0.62)', borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
+  scoreText: { color: colors.white, fontWeight: '700' },
+  agePill: { borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(255,255,255,0.24)', backgroundColor: 'rgba(8,6,14,0.50)' },
+  ageText: { color: colors.white, fontSize: 10.5, lineHeight: 13, fontWeight: '700' },
+  streamingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexShrink: 1 },
+  streamingText: { flexShrink: 1 },
+  body: { marginTop: -spacing.xl, gap: spacing.lg },
+  actionCard: { backgroundColor: colors.surface, borderRadius: radius.card, borderWidth: 1, borderColor: colors.border, padding: spacing.lg },
+  ratingCard: { backgroundColor: colors.surface, borderRadius: radius.card, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, gap: spacing.md },
+  ratingHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
+  ratingCopy: { gap: 2 },
+  ratingKicker: { color: colors.textMuted, fontSize: 10, lineHeight: 13, fontWeight: '700', letterSpacing: 1.6 },
+  clearRating: { color: colors.accent, fontWeight: '700' },
+  ratingStars: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  genreRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  genreChip: { backgroundColor: colors.surfaceElevated, borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderWidth: 1, borderColor: colors.border },
+  genreText: { color: colors.textPrimary, fontWeight: '600' },
+  messageCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.medium, padding: spacing.lg, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  messageText: { flex: 1 },
+  infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  infoCell: { flexBasis: '47%', flexGrow: 1, gap: 3, backgroundColor: colors.surface, borderRadius: radius.medium, borderWidth: 1, borderColor: colors.border, padding: spacing.md },
+  infoLabel: { letterSpacing: 0.4 },
+  infoValue: { color: colors.white },
+  progressCard: { backgroundColor: colors.surface, borderRadius: radius.card, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, gap: spacing.sm },
+  progressTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
+  progressKicker: { color: colors.textMuted, fontSize: 10, lineHeight: 13, fontWeight: '700', letterSpacing: 1.6 },
+  progressTrack: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceElevated, overflow: 'hidden' },
+  progressFill: { height: 6, borderRadius: 3, backgroundColor: colors.accent },
+  progressNext: { marginTop: 2 },
+  overviewRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  overviewPoster: { width: 96, height: 144, borderRadius: radius.medium, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border },
+  posterFallback: { alignItems: 'center', justifyContent: 'center' },
+  overviewCopy: { flex: 1, gap: spacing.xs },
+  overview: { lineHeight: 22 },
+  extras: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
+  section: { marginTop: spacing.lg },
+  seasonHeading: { marginBottom: spacing.md },
+  castRow: { gap: spacing.md, paddingRight: spacing.xl, marginTop: spacing.md },
+  castCard: { width: 84, gap: spacing.xs },
+  castPhoto: { width: 84, height: 84, borderRadius: 42, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border },
+  castFallback: { alignItems: 'center', justifyContent: 'center' },
+  castName: { color: colors.white },
+  providerGroup: { gap: spacing.sm, marginTop: spacing.md },
+  providerCategory: { letterSpacing: 1 },
+  providerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  provider: { width: 46, height: 46, borderRadius: radius.small, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  providerLogo: { width: 44, height: 44, borderRadius: radius.small },
+});

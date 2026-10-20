@@ -42,11 +42,11 @@ export function GenreFilter({ genres, value, onChange }: { genres: string[]; val
   );
 }
 
-export function LibrarySearchInput({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
+export function LibrarySearchInput({ value, onChange, label, placeholder = 'Search this list' }: { value: string; onChange: (value: string) => void; label: string; placeholder?: string }) {
   return (
     <View style={styles.searchWrap}>
       <Ionicons name="search" size={17} color={colors.textMuted} />
-      <TextInput accessibilityLabel={label} placeholder="Search this list" placeholderTextColor={colors.textMuted} value={value} onChangeText={onChange} returnKeyType="search" style={styles.input} selectionColor={colors.accent} />
+      <TextInput accessibilityLabel={label} placeholder={placeholder} placeholderTextColor={colors.textMuted} value={value} onChangeText={onChange} returnKeyType="search" style={styles.input} selectionColor={colors.accent} />
       {value.length > 0 ? <Pressable accessibilityRole="button" accessibilityLabel="Clear list search" onPress={() => onChange('')} hitSlop={10}><Ionicons name="close-circle" size={17} color={colors.textSecondary} /></Pressable> : null}
     </View>
   );

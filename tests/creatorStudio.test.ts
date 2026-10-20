@@ -113,14 +113,14 @@ function catalogMedia(overrides: Partial<CatalogMedia> = {}): CatalogMedia {
 }
 
 describe('creator template registry', () => {
-  it('ships the nine required layouts as valid, distinct metadata', () => {
-    expect(CREATOR_TEMPLATES).toHaveLength(9);
+  it('ships the required layouts as valid, distinct metadata', () => {
+    expect(CREATOR_TEMPLATES).toHaveLength(10);
     const ids = CREATOR_TEMPLATES.map((template) => template.id);
-    expect(new Set(ids).size).toBe(9);
+    expect(new Set(ids).size).toBe(10);
     for (const template of CREATOR_TEMPLATES) {
       expect(template.minTitles).toBeLessThanOrEqual(template.maxTitles);
-      // Every layout caps at five so one slide never crowds the 4:5 canvas.
-      expect(template.maxTitles).toBeLessThanOrEqual(5);
+      // Every layout caps at five except the deliberately nine-tile taste grid.
+      expect(template.maxTitles).toBeLessThanOrEqual(template.id === 'taste-grid' ? 9 : 5);
       expect(template.defaultSlides).toBe(1);
       expect(template.maxSlides).toBe(CREATOR_MAX_SLIDES);
       expect(template.name.length).toBeGreaterThan(0);
@@ -133,6 +133,7 @@ describe('creator template registry', () => {
     expect(isCreatorTemplateId('stacked-ranking')).toBe(true);
     expect(isCreatorTemplateId('nope')).toBe(false);
     expect(creatorTemplate('top5').maxTitles).toBe(5);
+    expect(creatorTemplate('taste-grid').maxTitles).toBe(9);
     expect(() => creatorTemplate('nope' as never)).toThrow('Unknown creator template');
   });
 
@@ -216,6 +217,11 @@ describe('creator validation', () => {
       'fallback-3',
     );
     expect(many?.titleRefs).toHaveLength(CREATOR_MAX_TITLES_PER_SLIDE);
+    const taste = parseCreatorSlide(
+      { layout: 'taste-grid', titleRefs: Array.from({ length: 12 }, (_, index) => ({ provider: 'tmdb', mediaType: 'movie', providerId: String(index), title: `T${index}` })) },
+      'fallback-taste',
+    );
+    expect(taste?.titleRefs).toHaveLength(9);
     expect(parseCreatorSlide('nope', 'fallback-4')).toBeNull();
   });
 
@@ -495,6 +501,7 @@ describe('creator editor reducer', () => {
 describe('creator seeds', () => {
   it('maps every seed to its template and format', () => {
     expect(creatorSeedTarget('watchlist')).toEqual({ templateId: 'watchlist-collection', format: 'carousel' });
+    expect(creatorSeedTarget('taste')).toEqual({ templateId: 'taste-grid', format: 'post' });
     expect(creatorSeedTarget('trending')).toEqual({ templateId: 'top5', format: 'carousel' });
     expect(creatorSeedTarget('upcoming')).toEqual({ templateId: 'upcoming-releases', format: 'carousel' });
     expect(creatorSeedTarget('hits-month')).toEqual({ templateId: 'stacked-ranking', format: 'carousel' });

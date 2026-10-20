@@ -77,6 +77,21 @@ describe('creator slide canvases', () => {
     act(() => comparison.unmount());
   });
 
+  it('renders exactly nine labeled tiles in the taste grid', () => {
+    const slide: CreatorSlide = {
+      ...createSlideForTemplate('taste-grid'),
+      titleRefs: Array.from({ length: 10 }, (_, index) => ref({ title: `Taste ${index}`, providerId: String(index) })),
+    };
+    const tree = renderCanvas('taste-grid', slide);
+    const text = textOf(tree);
+    expect(text).toContain('FAVORITE');
+    expect(text).toContain('HIDDEN GEM');
+    expect(text).toContain('WILDCARD');
+    expect(text).toContain('Taste 8');
+    expect(text).not.toContain('Taste 9');
+    act(() => tree.unmount());
+  });
+
   it('renders a long spotlight title with missing metadata without inventing facts', () => {
     const longTitle = 'An Extremely Long Movie Title That Refuses to Fit Anywhere and Keeps Going Until It Stops';
     const slide: CreatorSlide = { ...createSlideForTemplate('movie-spotlight'), titleRefs: [ref({ title: longTitle })] };

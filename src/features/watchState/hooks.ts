@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { CatalogMedia, CatalogSeason, MediaIdentity } from '@/domain/models/media';
-import type { InterestedCount, WatchPriority } from '@/domain/models/watchState';
+import type { InterestedCount, SeriesProgress, WatchPriority } from '@/domain/models/watchState';
 import { catalogRepository } from '@/data/remote/catalog/RemoteCatalogRepository';
 import { cloudWatchStateRepository } from '@/data/remote/supabase/SupabaseWatchStateRepository';
 import { watchStateRepository } from '@/data/local/repositories/SqliteWatchStateRepository';
@@ -271,6 +271,30 @@ export function useToggleEpisode(media: CatalogMedia, season: CatalogSeason) {
     onSettled: () => { void queryClient.invalidateQueries({ queryKey: key }); },
   });
   return { ...mutation, watchedIds: episodes.data ?? [], toggle: mutation.mutate, isMutating: mutation.isPending };
+}
+
+export function useAdvanceEpisode() {
+  const invalidate = useInvalidateWatchState();
+  return useMutation({
+    mutationFn: async (progress: SeriesProgress) => {
+      const { media, nextEpisode } = progress;
+      const seasonNumber = progress.nextSeasonNumber ?? nextEpisode?.seasonNumber;
+      if (media.mediaType === 'anime' && (!nextEpisode || seasonNumber === undefined)) {
+        const identity = { provider: media.provider, mediaType: media.mediaType, providerId: media.providerId };
+        const current = await watchStateRepository.getAnimeWatchedCount(identity);
+        const total = progress.totalEpisodeCount ?? media.numberOfEpisodes ?? 0;
+        const next = total > 0 ? Math.min(current + 1, total) : current + 1;
+        await watchStateRepository.setAnimeWatchedCount(media, next);
+        return;
+      }
+      if (!nextEpisode || seasonNumber === undefined) {
+        throw new Error('The next episode is not available yet.');
+      }
+      const season = await catalogRepository.getSeason(media, seasonNumber);
+      await watchStateRepository.setEpisodeWatched(media, season, nextEpisode, true);
+    },
+    onSuccess: () => invalidate(true),
+  });
 }
 
 export function useToggleSeason(media: CatalogMedia, seasonNumber: number) {
