@@ -129,6 +129,82 @@ export function useUpcomingCatalog(enabled = true) {
   });
 }
 
+/** Provider page caps mirrored from the repository, so the walk is bounded. */
+const COMPLETE_UPCOMING_LIMITS = { movies: 10, series: 25, anime: 25 } as const;
+
+/**
+ * Walks one upcoming feed to its last (capped) page. Pages are fetched four at
+ * a time because these are independent, read-only requests; one failed page is
+ * skipped rather than blanking the calendar.
+ */
+async function collectUpcomingPages(
+  fetchPage: (page: number, signal: AbortSignal) => Promise<PagedCatalog>,
+  maxPages: number,
+  signal: AbortSignal,
+): Promise<CatalogMedia[]> {
+  const first = await fetchPage(1, signal);
+  const totalPages = Math.min(Math.max(1, first.totalPages), maxPages);
+  const items = [...first.items];
+  if (totalPages <= 1) return items;
+
+  let nextPage = 2;
+  const worker = async () => {
+    while (nextPage <= totalPages) {
+      if (signal.aborted) return;
+      const page = nextPage;
+      nextPage += 1;
+      try {
+        const result = await fetchPage(page, signal);
+        items.push(...result.items);
+      } catch {
+        // Keep the pages that did arrive.
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(4, totalPages - 1) }, () => worker()));
+  return items;
+}
+
+/**
+ * The whole upcoming calendar in one cached query: every declared release
+ * date from movies, series, and anime, deduped and ordered oldest first.
+ * Rendering waits for this complete set, so the grid never re-sorts, jumps, or
+ * stops halfway — filtering is purely local afterwards.
+ */
+export function useAllUpcoming(enabled = true) {
+  return useQuery({
+    queryKey: ['catalog', 'upcoming', 'complete'] as const,
+    queryFn: async ({ signal }): Promise<CatalogMedia[]> => {
+      const region = deviceRegion();
+      const settled = await Promise.allSettled([
+        collectUpcomingPages((page, pageSignal) => catalogRepository.getUpcomingMoviesPage(page, region, pageSignal), COMPLETE_UPCOMING_LIMITS.movies, signal),
+        collectUpcomingPages((page, pageSignal) => catalogRepository.getUpcomingSeriesPage(page, region, pageSignal), COMPLETE_UPCOMING_LIMITS.series, signal),
+        collectUpcomingPages((page, pageSignal) => catalogRepository.getUpcomingAnimePage(page, pageSignal), COMPLETE_UPCOMING_LIMITS.anime, signal),
+      ]);
+      if (signal.aborted) throw new Error('Upcoming request cancelled');
+      const items = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+      if (!settled.some((result) => result.status === 'fulfilled')) {
+        const reason = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
+        throw reason instanceof Error ? reason : new Error('Could not load upcoming titles');
+      }
+      const seen = new Set<string>();
+      return items
+        .filter((item) => {
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        })
+        .sort((a, b) => (a.releaseDate ?? '9999').localeCompare(b.releaseDate ?? '9999'));
+    },
+    enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 30 * 60_000,
+    gcTime: 2 * 60 * 60_000,
+    retry: 1,
+  });
+}
+
 export function useTrailerKey(identity: MediaIdentity | undefined) {
   return useQuery({
     queryKey: identity ? ['catalog', 'trailer', identity.provider, identity.mediaType, identity.providerId] as const : ['catalog', 'trailer', 'none'],

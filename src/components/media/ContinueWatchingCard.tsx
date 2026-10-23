@@ -1,7 +1,8 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppText } from '@/components/common/AppText';
+import { RemoteImage } from '@/components/common/RemoteImage';
 import { triggerLightHaptic } from '@/lib/haptics';
 import { colors, radius, spacing } from '@/theme';
 
@@ -14,7 +15,7 @@ export function ContinueWatchingCard({ title, subtitle, progress, palette = ['#5
   const percent = Math.round(Math.max(0, Math.min(1, progress)) * 100);
   return <Pressable accessibilityRole="button" accessibilityLabel={`Continue watching ${title}`} onPress={() => { triggerLightHaptic(); onPress?.(); }} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
     <LinearGradient colors={[...palette]} style={styles.poster}>
-      {posterUri ? <Image source={{ uri: posterUri }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : <Ionicons name="play" size={20} color={colors.white} />}
+      {posterUri ? <RemoteImage uri={posterUri} style={StyleSheet.absoluteFill} /> : <Ionicons name="play" size={20} color={colors.white} />}
     </LinearGradient>
     <View style={styles.copy}>
       <AppText variant="bodyMedium" numberOfLines={1}>{title}</AppText>

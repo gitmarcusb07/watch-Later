@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/common/AppText';
 import { Screen } from '@/components/common/Screen';
@@ -23,6 +23,9 @@ import { colors, spacing } from '@/theme';
 function FavoriteRow({ media, onOpen }: { media: CatalogMedia; onOpen: () => void }) {
   const queryClient = useQueryClient();
   const mutation = useFavoriteMutation(media, true);
+  useEffect(() => {
+    if (mutation.error) void showDialog({ type: 'error', title: 'Couldn’t update your favorites', message: friendlyErrorMessage(mutation.error) });
+  }, [mutation.error]);
   const undoRemove = () => {
     void watchStateRepository.setFavorite(media, true).then(() => {
       void queryClient.invalidateQueries({ queryKey: watchKeys.all });
@@ -31,8 +34,8 @@ function FavoriteRow({ media, onOpen }: { media: CatalogMedia; onOpen: () => voi
       void showDialog({ type: 'error', title: 'Couldn’t restore', message: friendlyErrorMessage(undoError) });
     });
   };
-  return <TrackedMediaRow media={media} onPress={onOpen} actionLabel={`Remove ${media.title} from favorites`} actionIcon="heart" actionDisabled={mutation.isPending} onAction={() => mutation.mutate(undefined, {
-    onSuccess: () => showToast('Removed from favorites', 'info', { actionLabel: 'Undo', durationMs: 10000, onAction: undoRemove }),
+  return <TrackedMediaRow media={media} onPress={onOpen} actionLabel={`Remove ${media.title} from favorites`} actionIcon="heart" actionTone="favorite" actionMotion="heartbeat" actionDisabled={mutation.isPending} onAction={() => mutation.mutate(undefined, {
+    onSuccess: () => showToast('Removed from favorites', 'info', { actionLabel: 'Undo', durationMs: 5000, onAction: undoRemove }),
     onError: (error) => void showDialog({ type: 'error', title: 'Couldn’t update your favorites', message: friendlyErrorMessage(error) }),
   })} />;
 }

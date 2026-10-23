@@ -40,6 +40,13 @@ export interface SeasonSummary {
    * first via this id, then falls back to the AniList refs above.
    */
   refTmdbSeriesId?: string;
+  /**
+   * Anime-only: exact future broadcast dates AniList already knows about
+   * (`airingSchedule` / `nextAiringEpisode`). Providers like Kitsu and Jikan
+   * stop at aired episodes, so these keep episode 3+ dated while a season is
+   * still airing.
+   */
+  futureEpisodes?: { episodeNumber: number; airDate: string }[];
 }
 
 export interface CatalogMedia extends MediaIdentity {

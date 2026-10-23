@@ -47,7 +47,7 @@ interface HitsGridProps {
 export function HitsGrid({ items, loading, loadError, emptyTitle, emptyMessage, cardWidth, imdbRatings, onRetry, onOpen }: HitsGridProps) {
 
   if (loading && !items.length) {
-    return <View accessibilityRole="progressbar" accessibilityLabel="Loading rankings"><FlatList data={[0, 1, 2, 3, 4, 5]} keyExtractor={(item) => String(item)} numColumns={2} columnWrapperStyle={styles.gridRow} contentContainerStyle={styles.grid} style={styles.flat} renderItem={() => <PosterSkeleton />} showsVerticalScrollIndicator={false} /></View>;
+    return <View accessibilityRole="progressbar" accessibilityLabel="Loading rankings"><FlatList data={[0, 1, 2, 3, 4, 5]} keyExtractor={(item) => String(item)} numColumns={2} columnWrapperStyle={styles.gridRow} contentContainerStyle={styles.grid} style={styles.flat} renderItem={() => <PosterSkeleton width={cardWidth} />} showsVerticalScrollIndicator={false} /></View>;
   }
   if (loadError && !items.length) {
     return <ErrorView message="Could not load these rankings. Check your connection and try again." onRetry={onRetry} />;

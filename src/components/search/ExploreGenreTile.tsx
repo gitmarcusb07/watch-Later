@@ -1,7 +1,8 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { Image, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { AppText } from '@/components/common/AppText';
+import { RemoteImage } from '@/components/common/RemoteImage';
 import { triggerLightHaptic } from '@/lib/haptics';
 import { colors, radius, spacing } from '@/theme';
 
@@ -28,7 +29,7 @@ export function ExploreGenreTile({ name, imageUrl, gradient, onPress, style }: {
       style={({ pressed }) => [styles.tile, style, pressed && styles.pressed]}
     >
       <LinearGradient colors={gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
-      {imageUrl ? <Image source={{ uri: imageUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+      {imageUrl ? <RemoteImage uri={imageUrl} style={StyleSheet.absoluteFill} priority="low" /> : null}
       <LinearGradient
         colors={['rgba(5,6,10,0.02)', 'rgba(5,6,10,0.32)', 'rgba(5,6,10,0.92)']}
         locations={[0, 0.5, 1]}

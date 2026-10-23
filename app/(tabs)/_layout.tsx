@@ -3,6 +3,7 @@ import { StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, typography } from '@/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEpisodeScheduleBackfill } from '@/features/watchState/hooks';
 
 const icons = {
   index: ['home-outline', 'home'],
@@ -14,9 +15,14 @@ const icons = {
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+  // Warms every in-progress show's schedule in the background so the Watching
+  // tab can show future episode dates without a spinner on open.
+  useEpisodeScheduleBackfill();
   return (
-    <Tabs screenOptions={({ route }) => ({
+    <Tabs backBehavior="history" screenOptions={({ route }) => ({
       headerShown: false,
+      freezeOnBlur: true,
+      tabBarHideOnKeyboard: true,
       tabBarActiveTintColor: colors.white,
       tabBarInactiveTintColor: colors.textMuted,
       tabBarLabelStyle: { ...typography.caption, fontSize: 10, marginTop: 2, marginBottom: 3 },

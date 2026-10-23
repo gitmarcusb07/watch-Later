@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppText } from '@/components/common/AppText';
+import { RemoteImage } from '@/components/common/RemoteImage';
 import { showDialog, showToast } from '@/components/feedback/AppDialog';
 import type { CatalogMedia } from '@/domain/models/media';
 import type { LibraryStatus } from '@/domain/models/watchState';
@@ -18,6 +19,7 @@ import { colors, radius, spacing } from '@/theme';
 export function SearchResultCard({ media, onPress, status }: { media: CatalogMedia; onPress: () => void; status?: LibraryStatus }) {
   const [failedUri, setFailedUri] = useState<string>();
   const [finishing, setFinishing] = useState(false);
+  const finishingRef = useRef(false);
   const queryClient = useQueryClient();
   const watchlist = useWatchlistMutation(media, status?.watchlisted ?? false);
   const movie = useMovieWatchedMutation(media, status?.movieWatched ?? false);
@@ -37,17 +39,18 @@ export function SearchResultCard({ media, onPress, status }: { media: CatalogMed
     });
   };
   const markFinished = () => {
-    if (finishing) return;
+    if (finishingRef.current) return;
+    finishingRef.current = true;
     triggerMediumHaptic();
     setFinishing(true);
     finishTitle(media).then(() => {
       triggerSuccessHaptic();
       void queryClient.invalidateQueries({ queryKey: ['watch'] });
       scheduleAutoSync('mutation');
-      showToast(media.mediaType === 'movie' ? 'Marked as watched' : 'Marked whole show as watched', 'success');
+      showToast(media.mediaType === 'movie' ? 'Marked as watched' : 'Marked aired episodes as watched', 'success');
     }).catch((error: unknown) => {
       void showDialog({ type: 'error', title: 'Couldn’t mark as finished', message: friendlyErrorMessage(error) });
-    }).finally(() => setFinishing(false));
+    }).finally(() => { finishingRef.current = false; setFinishing(false); });
   };
   const posterFailed = failedUri === media.posterUrl;
   const typeLabel = media.mediaType === 'movie' ? 'Movie' : media.mediaType === 'series' ? 'TV series' : 'Anime';
@@ -59,7 +62,7 @@ export function SearchResultCard({ media, onPress, status }: { media: CatalogMed
   return <View style={styles.row}>
     <Pressable accessibilityRole="button" accessibilityLabel={`${media.title}${media.year ? `, ${media.year}` : ''}, ${typeLabel}${media.rating === undefined ? '' : `, rating ${media.rating.toFixed(1)}`}`} accessibilityHint="Opens title details" onPress={onPress} style={({ pressed }) => [styles.main, pressed && styles.pressed]}>
       <View style={styles.poster} accessible={false}>
-        {media.posterUrl && !posterFailed ? <Image source={{ uri: media.posterUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => setFailedUri(media.posterUrl)} /> : <LinearGradient colors={['#51416C', '#202637']} style={[StyleSheet.absoluteFill, styles.posterFallback]}><AppText variant="caption" style={styles.posterTitle} numberOfLines={3}>{media.title.toUpperCase()}</AppText></LinearGradient>}
+        {media.posterUrl && !posterFailed ? <RemoteImage uri={media.posterUrl} style={StyleSheet.absoluteFill} onError={() => setFailedUri(media.posterUrl)} /> : <LinearGradient colors={['#51416C', '#202637']} style={[StyleSheet.absoluteFill, styles.posterFallback]}><AppText variant="caption" style={styles.posterTitle} numberOfLines={3}>{media.title.toUpperCase()}</AppText></LinearGradient>}
       </View>
       <View style={styles.copy}><AppText variant="bodyMedium" numberOfLines={1}>{media.title}</AppText><AppText variant="caption" muted>{[media.year, typeLabel].filter(Boolean).join(' · ')}</AppText>{media.rating !== undefined ? <View style={styles.rating}><Ionicons name="star" size={13} color={colors.accent} /><AppText variant="caption" muted>{media.rating.toFixed(1)}</AppText></View> : null}</View>
     </Pressable>
@@ -72,7 +75,21 @@ export function SearchResultCard({ media, onPress, status }: { media: CatalogMed
           <Ionicons name="calendar-outline" size={19} color={colors.textMuted} />
         </View>
       ) : (<>
-      {media.mediaType === 'movie' || !status?.complete ? <Pressable accessibilityRole="button" accessibilityLabel={watchedLabel} accessibilityState={{ selected: media.mediaType === 'movie' ? status?.movieWatched : status?.tracking, disabled: !status || action.isPending }} disabled={!status || action.isPending} onPress={() => { triggerLightHaptic(); action.mutate(); }} style={[styles.add, (media.mediaType === 'movie' ? status?.movieWatched : status?.tracking) && styles.added]}><Ionicons name={media.mediaType === 'movie' ? (status?.movieWatched ? 'checkmark-circle' : 'checkmark-circle-outline') : (status?.tracking ? 'play' : 'play-outline')} size={19} color={(media.mediaType === 'movie' ? status?.movieWatched : status?.tracking) ? colors.success : colors.accent} /></Pressable> : null}
+      {media.mediaType === 'movie' || !status?.complete ? <Pressable accessibilityRole="button" accessibilityLabel={watchedLabel} accessibilityState={{ selected: media.mediaType === 'movie' ? status?.movieWatched : status?.tracking, disabled: !status || action.isPending }} disabled={!status || action.isPending} onPress={() => {
+        triggerLightHaptic();
+        // The small play control is easy to hit by accident, and stopping
+        // tracking deletes the show's episode history. Confirm that one.
+        if (media.mediaType !== 'movie' && status?.tracking) {
+          void showDialog({
+            type: 'warning', title: 'Stop tracking this show?',
+            message: 'Its episode progress will be cleared. You can add it again later.',
+            primaryAction: { label: 'Stop tracking', destructive: true },
+            secondaryAction: { label: 'Keep watching' },
+          }).then((confirmed) => { if (confirmed) action.mutate(); });
+          return;
+        }
+        action.mutate();
+      }} style={[styles.add, (media.mediaType === 'movie' ? status?.movieWatched : status?.tracking) && styles.added]}><Ionicons name={media.mediaType === 'movie' ? (status?.movieWatched ? 'checkmark-circle' : 'checkmark-circle-outline') : (status?.tracking ? 'play' : 'play-outline')} size={19} color={(media.mediaType === 'movie' ? status?.movieWatched : status?.tracking) ? colors.success : colors.accent} /></Pressable> : null}
       {media.mediaType !== 'movie' ? <Pressable accessibilityRole="button" accessibilityLabel={`Mark ${media.title} finished`} accessibilityState={{ disabled: !status || finishing }} disabled={!status || finishing} onPress={markFinished} style={styles.add}><Ionicons name="checkmark-done" size={19} color={colors.accent} /></Pressable> : null}
       </>)}
     </View>

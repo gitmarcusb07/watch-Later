@@ -1,4 +1,5 @@
 import { AppError } from '@/domain/errors/AppError';
+import { CatalogError } from '@/domain/errors/CatalogError';
 import type { CatalogMedia, CatalogSeason, MediaIdentity } from '@/domain/models/media';
 import type { WatchStateRepository } from '@/domain/models/watchState';
 import { catalogRepository } from '@/data/remote/catalog/RemoteCatalogRepository';
@@ -41,8 +42,10 @@ const defaultContext = (): ProgressContext => ({
 
 /**
  * One-tap "Already seen": movies finish instantly; series and anime fetch
- * their real season metadata first and then finish every episode. Anime
- * without any episode data falls back to a completion flag (never invented).
+ * their real season metadata first and then mark every episode that has
+ * aired. Future weekly episodes are cached for the schedule but stay
+ * unwatched, so an in-progress show never reads as completed. Anime without
+ * any episode data falls back to a completion flag (never invented).
  */
 export async function finishTitle(media: CatalogMedia, context: ProgressContext = defaultContext()): Promise<void> {
   const repo = context.repo ?? watchStateRepository;
@@ -50,56 +53,126 @@ export async function finishTitle(media: CatalogMedia, context: ProgressContext 
     await repo.markMovieWatched(media, true);
     return;
   }
+
+  const finishWithoutEpisodes = async () => {
+    await repo.startTrackingSeries(media);
+    await repo.setSeriesComplete(media, true);
+  };
+
   if (media.provider === 'anilist' && media.mediaType === 'anime') {
     try {
-      const full = await context.getFullMedia(media);
+      const full = media.seasonSummaries?.length ? media : await context.getFullMedia(media);
       const summaries = full.seasonSummaries ?? [];
       if (!summaries.length) throw new AppError('catalog', "Episode information isn't available for this title.");
-      const seasons: { seasonNumber: number; name: string; episodeCount?: number; overview?: string; airDate?: string; posterUrl?: string; episodes: CatalogSeason['episodes'] }[] = [];
-      for (const summary of summaries) {
-        try {
-          const season = await context.getSeason(full, summary.seasonNumber);
-          if (season.episodes.length) seasons.push({ ...season, episodeCount: summary.episodeCount });
-        } catch {
-          // One unreachable season must not block the rest.
-        }
-      }
+      const seasons = await collectSeasons(full, summaries, context, repo);
       if (!seasons.length) throw new AppError('catalog', "Episode information isn't available for this title.");
       await repo.setSeriesWatched(full, seasons, true);
-      return;
-    } catch (error) {
-      if (error instanceof AppError && error.kind !== 'catalog') throw error;
+    } catch {
       // No episode data anywhere: track + flag complete instead of failing.
-      await repo.startTrackingSeries(media);
-      await repo.setSeriesComplete(media, true);
-      return;
+      await finishWithoutEpisodes();
     }
+    return;
   }
-  if (media.provider === 'tvdb') {
-    // TVDB seasons are official aired-order rows for shows and anime alike.
+
+  if (media.provider === 'tvdb' || (media.provider === 'tmdb' && media.mediaType === 'series')) {
+    // Prefer the season summaries the content page already has: re-fetching
+    // the parent title on every finish is what used to hit TMDb rate limits
+    // after a title was moved to the watchlist and marked again.
     const full = media.seasonSummaries?.length ? media : await context.getFullMedia(media);
     const summaries = full.seasonSummaries ?? [];
     if (!summaries.length) throw new AppError('catalog', "Episode information isn't available for this title.");
-    const seasons = await Promise.all(summaries.map(async (summary) => {
-      const season = await context.getSeason(full, summary.seasonNumber);
-      return { ...season, episodeCount: summary.episodeCount };
-    }));
+    const seasons = await collectSeasons(full, summaries, context, repo);
+    // Every season request can fail (offline, rate limit) while cached episode
+    // rows still exist. Marking the series complete is better than showing the
+    // user an error after a deliberate "Mark as Watched" tap.
+    if (!seasons.length) {
+      await finishWithoutEpisodes();
+      return;
+    }
     await repo.setSeriesWatched(full, seasons, true);
     return;
   }
-  if (media.provider !== 'tmdb' || media.mediaType !== 'series') {
-    await repo.startTrackingSeries(media);
-    await repo.setSeriesComplete(media, true);
-    return;
-  }
-  const full = await context.getFullMedia(media);
-  const summaries = full.seasonSummaries ?? [];
-  if (!summaries.length) throw new AppError('catalog', "Episode information isn't available for this title.");
-  const seasons = await Promise.all(summaries.map(async (summary) => {
-    const season = await context.getSeason(full, summary.seasonNumber);
-    return { ...season, episodeCount: summary.episodeCount };
+
+  await finishWithoutEpisodes();
+}
+
+interface FinishSeason {
+  seasonNumber: number;
+  name: string;
+  episodeCount?: number;
+  overview?: string;
+  airDate?: string;
+  posterUrl?: string;
+  episodes: CatalogSeason['episodes'];
+}
+
+/** Stay below provider burst limits while still finishing a long show quickly. */
+const SEASON_FETCH_CONCURRENCY = 4;
+const SEASON_RETRY_DELAYS_MS = [400, 1200];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableSeasonError(error: unknown): boolean {
+  return error instanceof CatalogError
+    && (error.code === 'rate_limited' || error.code === 'server' || error.code === 'timeout' || error.code === 'network');
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * Cached seasons first, network only for the gaps. A burst of 20+ season
+ * requests can be rate-limited, which used to leave a long show silently
+ * half-finished, so missing seasons retry with backoff and run in a small pool.
+ */
+async function collectSeasons(
+  full: CatalogMedia,
+  summaries: { seasonNumber: number; episodeCount?: number }[],
+  context: ProgressContext,
+  repo: NonNullable<ProgressContext['repo']>,
+): Promise<FinishSeason[]> {
+  const identity: MediaIdentity = { provider: full.provider, mediaType: full.mediaType, providerId: full.providerId };
+  const seasons: FinishSeason[] = [];
+  const missing: typeof summaries = [];
+
+  // Read every cached season in one parallel pass. A 20-season show used to
+  // do 20 sequential SQLite round trips before the first network request.
+  const cachedSeasons = await Promise.all(summaries.map(async (summary): Promise<{ summary: typeof summary; season?: CatalogSeason }> => {
+    if (!repo.getCachedSeason) return { summary };
+    try { return { summary, season: await repo.getCachedSeason(identity, summary.seasonNumber) }; }
+    catch { return { summary }; }
   }));
-  await repo.setSeriesWatched(full, seasons, true);
+  for (const { summary, season } of cachedSeasons) {
+    if (season?.episodes.length) seasons.push({ ...season, episodeCount: summary.episodeCount });
+    else missing.push(summary);
+  }
+
+  const fetched = await mapWithConcurrency(missing, SEASON_FETCH_CONCURRENCY, async (summary) => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const season = await context.getSeason(full, summary.seasonNumber);
+        return season.episodes.length ? { ...season, episodeCount: summary.episodeCount } : undefined;
+      } catch (error) {
+        if (attempt >= SEASON_RETRY_DELAYS_MS.length || !isRetryableSeasonError(error)) return undefined;
+        await delay(SEASON_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  });
+  for (const season of fetched) if (season) seasons.push(season);
+  return seasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
 }
 
 /**
@@ -128,8 +201,8 @@ export async function markUpToHere(media: CatalogMedia, seasonNumber: number, ep
     season = (await repo.getCachedSeason(identity, seasonNumber)) ?? fetched;
   }
   const lastAired = season.episodes.reduce((latest, episode) => (hasAired(episode.airDate) ? Math.max(latest, episode.episodeNumber) : latest), 0);
-  const target = Math.min(episodeNumber, lastAired || episodeNumber);
-  if (target < 1) throw new AppError('catalog', 'No episodes of this season have aired yet.');
+  if (lastAired < 1) throw new AppError('catalog', 'No episodes of this season have aired yet.');
+  const target = Math.min(episodeNumber, lastAired);
   await repo.markEpisodesUpTo(media, season, target);
   return target;
 }

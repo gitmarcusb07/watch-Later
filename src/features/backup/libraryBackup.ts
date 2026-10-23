@@ -4,9 +4,25 @@ import * as DocumentPicker from 'expo-document-picker';
 import { AppError } from '@/domain/errors/AppError';
 import { LIBRARY_BACKUP_FORMAT, LIBRARY_BACKUP_VERSION, watchStateRepository, type LibraryBackup } from '@/data/local/repositories/SqliteWatchStateRepository';
 import { queryClient } from '@/lib/query/queryClient';
+import { scheduleAutoSync } from '@/features/sync/autoSync';
 
 function backupFileName(now = new Date()): string {
   return `watch-later-backup-${now.toISOString().slice(0, 10)}.json`;
+}
+
+/** A real library backup is tiny; refuse oversized files before parsing them. */
+const MAX_BACKUP_BYTES = 32 * 1024 * 1024;
+
+async function readBackupText(uri: string): Promise<string> {
+  const info = await FileSystem.getInfoAsync(uri);
+  if (info.exists && typeof info.size === 'number' && info.size > MAX_BACKUP_BYTES) {
+    throw new AppError('validation', 'That backup file is too large to import.');
+  }
+  const raw = await FileSystem.readAsStringAsync(uri);
+  if (raw.length > MAX_BACKUP_BYTES) {
+    throw new AppError('validation', 'That backup file is too large to import.');
+  }
+  return raw;
 }
 
 function parseBackupFile(raw: string): LibraryBackup {
@@ -55,7 +71,7 @@ export async function pickBackupFile(): Promise<PickedBackup | null> {
   const cancelled = 'canceled' in result ? result.canceled : (result as { type?: string }).type === 'cancel';
   const assetUri = 'assets' in result ? result.assets?.[0]?.uri : (result as { uri?: string }).uri;
   if (cancelled || !assetUri) return null;
-  const backup = parseBackupFile(await FileSystem.readAsStringAsync(assetUri));
+  const backup = parseBackupFile(await readBackupText(assetUri));
   const tables = backup.tables.tracked_media;
   return { uri: assetUri, titles: Array.isArray(tables) ? tables.length : 0, exportedAt: backup.exportedAt };
 }
@@ -65,8 +81,10 @@ export async function pickBackupFile(): Promise<PickedBackup | null> {
  * then refreshes the UI. The backup file itself is never modified.
  */
 export async function restoreLibraryBackup(uri: string): Promise<{ titles: number }> {
-  const backup = parseBackupFile(await FileSystem.readAsStringAsync(uri));
+  const backup = parseBackupFile(await readBackupText(uri));
   const result = await watchStateRepository.importLibrary(backup);
   await queryClient.invalidateQueries();
+  // The repository queues the restored rows; upload them for signed-in users.
+  scheduleAutoSync('mutation');
   return result;
 }

@@ -3,12 +3,23 @@ const ANIME_FIELDS = `
   coverImage { large extraLarge } bannerImage
   startDate { year month day } endDate { year month day } season seasonYear format status
   episodes duration genres averageScore popularity
+  nextAiringEpisode { episode airingAt }
   studios(isMain: true) { nodes { name } }
+`;
+
+/**
+ * Exact future broadcast dates. Only the detail query asks for this: it costs
+ * one node per remaining episode, which is wasted weight on list rows.
+ */
+const ANIME_AIRING_SCHEDULE = `
+  airingSchedule(notYetAired: true, perPage: 50) {
+    nodes { episode airingAt }
+  }
 `;
 
 /** Season chain for the detail screen only — list queries stay light. */
 const ANIME_RELATIONS = `
-  relations { edges { relationType node { id idMal title { romaji english native } format status episodes coverImage { large } startDate { year month day } } } }
+  relations { edges { relationType node { id idMal title { romaji english native } format status episodes coverImage { large } startDate { year month day } nextAiringEpisode { episode airingAt } } } }
 `;
 
 export const ANIME_SEARCH_QUERY = `
@@ -24,6 +35,7 @@ export const ANIME_DETAIL_QUERY = `
 query AnimeDetails($id: Int!) {
   Media(id: $id, type: ANIME) {
     ${ANIME_FIELDS}
+    ${ANIME_AIRING_SCHEDULE}
     ${ANIME_RELATIONS}
   }
 }`;

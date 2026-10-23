@@ -1,8 +1,9 @@
 import { memo, useState } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppText } from '@/components/common/AppText';
+import { RemoteImage } from '@/components/common/RemoteImage';
 import { triggerLightHaptic } from '@/lib/haptics';
 import { colors, radius, spacing } from '@/theme';
 
@@ -24,7 +25,7 @@ export const PosterCard = memo(function PosterCard({ title, posterUri, subtitle,
   const [failedUri, setFailedUri] = useState<string>();
   const posterFailed = failedUri === posterUri;
   const poster = <View style={[styles.poster, { width, height: width * 1.46 }]}>
-    {posterUri && !posterFailed ? <Image source={{ uri: posterUri }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => setFailedUri(posterUri)} /> : <LinearGradient colors={[...palette]} style={styles.art}>
+    {posterUri && !posterFailed ? <RemoteImage uri={posterUri} style={StyleSheet.absoluteFill} onError={() => setFailedUri(posterUri)} /> : <LinearGradient colors={[...palette]} style={styles.art}>
       <View style={styles.artTop}><Ionicons name="sparkles" size={14} color="rgba(255,255,255,0.7)" /></View>
       <AppText variant="caption" style={styles.artTitle} numberOfLines={3}>{title.toUpperCase()}</AppText>
       <View style={styles.artMark}><View style={styles.artMarkInner} /></View>

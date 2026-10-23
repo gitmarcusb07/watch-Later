@@ -96,11 +96,11 @@ export default function CreatorStudioScreen() {
     <Screen scroll refreshControl={<RefreshControl refreshing={draftsQuery.isRefetching && !draftsQuery.isLoading} onRefresh={() => void draftsQuery.refetch()} tintColor={colors.accent} colors={[colors.accent]} />}>
       <FadeInView>
         <View style={styles.topRow}>
-          <IconButton name="arrow-back" label="Go back" onPress={() => router.back()} />
-          <View style={styles.topBadge}><Ionicons name="sparkles" size={12} color={colors.accent} /><AppText style={styles.topBadgeText}>CREATOR STUDIO</AppText></View>
+          <IconButton name="arrow-back" label="Go back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />
+          <View style={styles.topBadge}><Ionicons name="sparkles" size={12} color={colors.accent} /><AppText style={styles.topBadgeText}>CREATOR STUDIO</AppText><View style={styles.betaBadge}><AppText style={styles.betaText}>BETA</AppText></View></View>
         </View>
         <AppText style={styles.heroTitle}>Share your taste.</AppText>
-        <AppText variant="bodySmall" muted style={styles.heroSubtitle}>Nine picks, one grid. Turn your watchlist into a 3×3 share card, then make every label yours.</AppText>
+        <AppText variant="bodySmall" muted style={styles.heroSubtitle}>Beta · nine picks, one grid. Turn your watchlist into a 3×3 share card, then make every label yours.</AppText>
       </FadeInView>
 
       <FadeInView delay={80}>
@@ -266,6 +266,8 @@ const styles = StyleSheet.create({
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: spacing.lg, paddingBottom: spacing.md },
   topBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   topBadgeText: { color: colors.textSecondary, fontSize: 9.5, lineHeight: 12, fontWeight: '800', letterSpacing: 1.4 },
+  betaBadge: { borderRadius: radius.pill, backgroundColor: colors.warning, paddingHorizontal: 7, paddingVertical: 2 },
+  betaText: { color: '#1A1206', fontSize: 9, lineHeight: 12, fontWeight: '900', letterSpacing: 0.9 },
   heroTitle: { color: colors.white, fontSize: 38, lineHeight: 42, fontWeight: '800', letterSpacing: -1.2 },
   heroSubtitle: { marginTop: spacing.sm, maxWidth: 360, lineHeight: 21 },
   tasteCard: { alignSelf: 'center', marginTop: spacing.xl, padding: spacing.md, borderRadius: radius.card, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },

@@ -48,6 +48,43 @@ export interface AnimeSeasonEntry {
   year?: number;
   month?: number;
   day?: number;
+  /** Exact future episode dates declared by AniList for this entry. */
+  futureEpisodes?: { episodeNumber: number; airDate: string }[];
+}
+
+/** Unix airing timestamp → local calendar date, matching every other air date. */
+export function airDateFromAiringAt(seconds?: number | null): string | undefined {
+  if (!Number.isFinite(seconds) || !seconds || seconds <= 0) return undefined;
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Future dates declared by AniList. `airingSchedule` is the full remaining
+ * broadcast list; `nextAiringEpisode` is the cheap single-date fallback carried
+ * by list queries and relation nodes.
+ */
+export function animeFutureEpisodes(dto: {
+  nextAiringEpisode?: { episode?: number | null; airingAt?: number | null } | null;
+  airingSchedule?: { nodes?: ({ episode?: number | null; airingAt?: number | null } | null)[] | null } | null;
+}): { episodeNumber: number; airDate: string }[] {
+  const dates = new Map<number, string>();
+  for (const node of dto.airingSchedule?.nodes ?? []) {
+    const episodeNumber = node?.episode;
+    const airDate = airDateFromAiringAt(node?.airingAt);
+    if (Number.isSafeInteger(episodeNumber) && (episodeNumber as number) > 0 && airDate) {
+      dates.set(episodeNumber as number, airDate);
+    }
+  }
+  const nextNumber = dto.nextAiringEpisode?.episode;
+  const nextDate = airDateFromAiringAt(dto.nextAiringEpisode?.airingAt);
+  if (Number.isSafeInteger(nextNumber) && (nextNumber as number) > 0 && nextDate && !dates.has(nextNumber as number)) {
+    dates.set(nextNumber as number, nextDate);
+  }
+  return [...dates.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([episodeNumber, airDate]) => ({ episodeNumber, airDate }));
 }
 
 function entryFromRelationNode(node: AniListRelationNode | null | undefined): AnimeSeasonEntry | null {
@@ -65,6 +102,7 @@ function entryFromRelationNode(node: AniListRelationNode | null | undefined): An
     year: node.startDate?.year ?? undefined,
     month: node.startDate?.month ?? undefined,
     day: node.startDate?.day ?? undefined,
+    futureEpisodes: node.nextAiringEpisode ? animeFutureEpisodes(node) : undefined,
   };
 }
 
@@ -86,6 +124,7 @@ export function animeSeasonEntries(dto: AniListMediaDto): AnimeSeasonEntry[] {
     year: dto.startDate?.year ?? undefined,
     month: dto.startDate?.month ?? undefined,
     day: dto.startDate?.day ?? undefined,
+    futureEpisodes: animeFutureEpisodes(dto),
   };
   const seen = new Set([self.providerId]);
   const related: AnimeSeasonEntry[] = [];
@@ -116,6 +155,7 @@ export function animeEntriesToSummaries(entries: AnimeSeasonEntry[]): SeasonSumm
     posterUrl: entry.posterUrl,
     refProviderId: entry.providerId,
     refMalId: entry.malId,
+    ...(entry.futureEpisodes?.length ? { futureEpisodes: entry.futureEpisodes } : {}),
   }));
 }
 

@@ -3,7 +3,7 @@
     "name": "watch Later",
     "slug": "watch-later",
     "scheme": "watchlater",
-    "version": "1.0.0",
+    "version": "1.0.5",
     "orientation": "portrait",
     "backgroundColor": "#070312",
     "androidStatusBar": {
@@ -19,7 +19,7 @@
     },
     "android": {
       "package": "com.watchlater.app",
-      "versionCode": 1,
+      "versionCode": 9,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -82,7 +82,8 @@
             "photo"
           ]
         }
-      ]
+      ],
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true

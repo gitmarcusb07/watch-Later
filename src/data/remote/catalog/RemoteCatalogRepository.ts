@@ -4,7 +4,7 @@ import type { CatalogRepository as CatalogRepositoryContract, GenrePageKind, Pag
 import { imageUrl, getTmdbApiKey } from '@/data/remote/catalog/config';
 import { normalizeSearchText, rankSearchResults, type SearchPopularity } from '@/data/remote/catalog/searchRank';
 import { deviceRegion } from '@/data/remote/catalog/region';
-import { mapAniListAnime, animeEntriesToSummaries, animeSeasonEntries, mapAnimeSeason, syntheticAnimeSeason } from '@/data/remote/anilist/mappers';
+import { mapAniListAnime, animeEntriesToSummaries, animeFutureEpisodes, animeSeasonEntries, mapAnimeSeason, syntheticAnimeSeason } from '@/data/remote/anilist/mappers';
 import type { AnimeSeasonEntry } from '@/data/remote/anilist/mappers';
 import type { AniListMediaDto } from '@/data/remote/anilist/types';
 import { anilistClient } from '@/data/remote/anilist/client';
@@ -43,6 +43,63 @@ function itemYear(item: { releaseDate?: string; year?: number }): number | undef
 /** Gap dedupe treats a movie apart from the series/anime family. */
 function itemKind(item: { mediaType: CatalogMediaType }): 'movie' | 'tv' {
   return item.mediaType === 'movie' ? 'movie' : 'tv';
+}
+
+/**
+ * A season needs the provider's future schedule when it is incomplete, or when
+ * it already carries aired dates but stops at undated rows beyond them. An
+ * entirely undated synthetic list is left alone: there is no aired anchor, and
+ * AniList's future-only schedule could not fill its past episodes anyway.
+ */
+function needsFutureSchedule(episodes: { episodeNumber: number; airDate?: string }[], total: number): boolean {
+  if (total <= 0 || episodes.length < total) return true;
+  const lastDated = episodes.reduce((latest, episode) => episode.airDate ? Math.max(latest, episode.episodeNumber) : latest, 0);
+  return lastDated > 0 && episodes.some((episode) => !episode.airDate && episode.episodeNumber > lastDated);
+}
+
+/**
+ * Adds AniList's declared future broadcast dates to a season. Kitsu and Jikan
+ * stop at episodes that have already aired, so without this a weekly anime
+ * would lose the date for episode 3+ even though AniList already knows it.
+ * Existing rows are never replaced; only missing rows/dates are filled.
+ */
+function withAnimeFutureEpisodes(
+  season: CatalogSeason,
+  identity: MediaIdentity,
+  total: number,
+  futureEpisodes: { episodeNumber: number; airDate: string }[] | undefined,
+): CatalogSeason {
+  if (!futureEpisodes?.length) return season;
+  const limit = total > 0 ? total : futureEpisodes[futureEpisodes.length - 1].episodeNumber;
+  const byNumber = new Map(season.episodes.map((episode) => [episode.episodeNumber, episode]));
+  let changed = false;
+  for (const future of futureEpisodes) {
+    if (!Number.isSafeInteger(future.episodeNumber) || future.episodeNumber < 1 || future.episodeNumber > limit) continue;
+    const existing = byNumber.get(future.episodeNumber);
+    if (existing) {
+      if (!existing.airDate) {
+        byNumber.set(future.episodeNumber, { ...existing, airDate: future.airDate });
+        changed = true;
+      }
+      continue;
+    }
+    byNumber.set(future.episodeNumber, {
+      provider: 'anilist',
+      mediaType: 'anime',
+      providerId: `${identity.providerId}-s${season.seasonNumber}e${future.episodeNumber}`,
+      seriesId: identity.providerId,
+      seasonNumber: season.seasonNumber,
+      episodeNumber: future.episodeNumber,
+      title: `Episode ${future.episodeNumber}`,
+      airDate: future.airDate,
+    });
+    changed = true;
+  }
+  if (!changed) return season;
+  return {
+    ...season,
+    episodes: [...byNumber.values()].sort((a, b) => a.episodeNumber - b.episodeNumber),
+  };
 }
 
 /** Bounds a side-channel lookup so ranking never delays the visible results. */
@@ -499,6 +556,14 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
       const tvSeasons = (tv.seasons ?? []).filter((season) => season.season_number > 0);
       if (!tvSeasons.length) return;
       const anilistId = media.providerId;
+      // The overlay replaces AniList's season rows, but the exact future
+      // broadcast dates are AniList-only. Keep them on the season that is
+      // currently airing (the latest one that has already started).
+      const futureEpisodes = (media.seasonSummaries ?? []).flatMap((season) => season.futureEpisodes ?? []);
+      const today = new Date().toISOString().slice(0, 10);
+      const airedSeasons = tvSeasons.filter((season) => !season.air_date || season.air_date <= today);
+      const airingSeasonNumber = (airedSeasons.length ? airedSeasons : tvSeasons)
+        .reduce((latest, season) => season.season_number > latest ? season.season_number : latest, -1);
       media.seasonSummaries = tvSeasons.map((season) => ({
         seasonNumber: season.season_number,
         name: season.name || `Season ${season.season_number}`,
@@ -508,6 +573,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
         refProviderId: anilistId,
         refMalId: malId,
         refTmdbSeriesId: String(tmdbId),
+        ...(futureEpisodes.length && season.season_number === airingSeasonNumber ? { futureEpisodes } : {}),
       }));
       const total = tvSeasons.reduce((sum, season) => sum + (season.episode_count ?? 0), 0);
       if (total > 0) media.numberOfEpisodes = total;
@@ -587,7 +653,12 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
         catch { continue; }
       }
       for (const entry of animeSeasonEntries(currentDto)) {
-        if (!entries.has(entry.providerId)) entries.set(entry.providerId, entry);
+        const existing = entries.get(entry.providerId);
+        // A relation node carries only the next air date; once the entry is
+        // fetched in full it can carry the whole remaining schedule.
+        if (!existing || (entry.providerId === String(currentDto.id) && entry.futureEpisodes?.length)) {
+          entries.set(entry.providerId, entry);
+        }
       }
       for (const edge of currentDto.relations?.edges ?? []) {
         const nodeId = edge?.node?.id;
@@ -641,7 +712,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
       throw new CatalogError(identity.provider, 'metadata_unavailable');
     }
     const total = summary.episodeCount ?? 0;
-    const episodes = await this.getAnimeSeasonEpisodes(identity, seasonNumber, summary.name, summary.refProviderId, summary.refMalId, total, signal, summary.refTmdbSeriesId);
+    const episodes = await this.getAnimeSeasonEpisodes(identity, seasonNumber, summary.name, summary.refProviderId, summary.refMalId, total, signal, summary.refTmdbSeriesId, summary.futureEpisodes);
     if (episodes) return episodes;
     return this.getAnimeSeason(identity, seasonNumber, signal);
   }
@@ -662,19 +733,35 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     total: number,
     signal?: AbortSignal,
     refTmdbSeriesId?: string,
+    futureEpisodes?: { episodeNumber: number; airDate: string }[],
   ): Promise<CatalogSeason | undefined> {
+    const anilistId = Number(refProviderId ?? identity.providerId);
+    // Kitsu/Jikan stop at aired episodes. If the summary predates the exact
+    // schedule (already-tracked titles) or the provider returned a partial
+    // list, ask AniList for the declared future dates before giving up.
+    const applyFutureEpisodes = async (season: CatalogSeason): Promise<CatalogSeason> => {
+      let future = futureEpisodes;
+      const needsSchedule = needsFutureSchedule(season.episodes, total);
+      if (!future?.length && needsSchedule && Number.isSafeInteger(anilistId) && anilistId > 0) {
+        try {
+          future = animeFutureEpisodes(await anilistClient.getAnime(anilistId, signal));
+        } catch {
+          // The season stays usable without a future schedule.
+        }
+      }
+      return withAnimeFutureEpisodes(season, identity, total, future);
+    };
     // TMDB-backed anime seasons resolve episodes from TMDB first (correct
     // titles, stills, counts); Kitsu/Jikan remain as fallbacks below.
     if (refTmdbSeriesId) {
       try {
         const season = await tmdbClient.getSeason(refTmdbSeriesId, seasonNumber, signal);
         const mapped = mapTmdbAnimeSeason(identity, seasonNumber, seasonName, refTmdbSeriesId, season);
-        if (mapped.episodes.length) return mapped;
+        if (mapped.episodes.length) return applyFutureEpisodes(mapped);
       } catch {
         // Fall through to Kitsu, then Jikan, then the synthetic list below.
       }
     }
-    const anilistId = Number(refProviderId ?? identity.providerId);
     if (Number.isSafeInteger(anilistId) && anilistId > 0) {
       try {
         const kitsuId = await kitsuClient.resolveAnimeId(anilistId, signal);
@@ -682,7 +769,7 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
           const episodes = await kitsuClient.getAllEpisodes(kitsuId, signal);
           // Kitsu entries occasionally carry no episode rows (films, shorts
           // grouped under one entry); only trust a non-empty list.
-          if (episodes.length) return mapAnimeSeason(identity, seasonNumber, seasonName, episodes);
+          if (episodes.length) return applyFutureEpisodes(mapAnimeSeason(identity, seasonNumber, seasonName, episodes));
         }
       } catch {
         // Fall through to Jikan, then the synthetic list below.
@@ -691,12 +778,12 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
     if (refMalId) {
       try {
         const episodes = await jikanClient.getAllEpisodes(refMalId, signal);
-        if (episodes.length) return mapAnimeSeason(identity, seasonNumber, seasonName, episodes);
+        if (episodes.length) return applyFutureEpisodes(mapAnimeSeason(identity, seasonNumber, seasonName, episodes));
       } catch {
         // Fall through to the synthetic list below.
       }
     }
-    if (total > 0) return syntheticAnimeSeason(identity, seasonNumber, total);
+    if (total > 0) return applyFutureEpisodes(syntheticAnimeSeason(identity, seasonNumber, total));
     return undefined;
   }
 
@@ -722,11 +809,13 @@ export class RemoteCatalogRepository implements CatalogRepositoryContract {
         const refDto = await anilistClient.getAnime(refId, signal);
         malId = refDto.idMal ?? malId;
         if (refDto.episodes) total = refDto.episodes;
+        const future = animeFutureEpisodes(refDto);
+        if (!summary.futureEpisodes?.length && future.length) summary.futureEpisodes = future;
       } catch {
         // The chain data stands on its own.
       }
     }
-    const episodes = await this.getAnimeSeasonEpisodes(identity, seasonNumber, summary.name, summary.refProviderId, malId, total, signal, summary.refTmdbSeriesId);
+    const episodes = await this.getAnimeSeasonEpisodes(identity, seasonNumber, summary.name, summary.refProviderId, malId, total, signal, summary.refTmdbSeriesId, summary.futureEpisodes);
     if (episodes) return episodes;
     throw new CatalogError(identity.provider, 'metadata_unavailable');
   }

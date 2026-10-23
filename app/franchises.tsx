@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { FlatList, Keyboard, TextInput, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { AppText } from '@/components/common/AppText';
@@ -19,7 +19,9 @@ export default function FranchisesScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const [query, setQuery] = useState('');
-  const entries = useMemo(() => filterFranchises(undefined, query), [query]);
+  // Filtering every member title on each keystroke should never block typing.
+  const deferredQuery = useDeferredValue(query);
+  const entries = useMemo(() => filterFranchises(undefined, deferredQuery), [deferredQuery]);
   const cardWidth = Math.max(140, Math.floor((Math.min(width, 760) - spacing.xl * 2 - spacing.md) / 2));
   const openFranchise = (slug: string) => {
     Keyboard.dismiss();
@@ -62,8 +64,13 @@ export default function FranchisesScreen() {
         columnWrapperStyle={styles.column}
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
-        initialNumToRender={6}
+        initialNumToRender={4}
+        maxToRenderPerBatch={6}
+        updateCellsBatchingPeriod={30}
+        windowSize={7}
+        removeClippedSubviews
         ListEmptyComponent={
           <EmptyState
             icon="search-outline"

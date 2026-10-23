@@ -1,10 +1,11 @@
 import type { PropsWithChildren } from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 
 interface FadeInViewProps {
   style?: StyleProp<ViewStyle>;
   delay?: number;
   distance?: number;
+  onLayout?: (event: LayoutChangeEvent) => void;
 }
 
 // Lazy-load Reanimated so the Jest renderer (no native worklets module)
@@ -34,18 +35,18 @@ try {
  * Instant when the user prefers reduced motion — or when Reanimated is
  * unavailable (tests). Never used on list rows.
  */
-export function FadeInView({ children, style, delay = 0, distance = 10 }: PropsWithChildren<FadeInViewProps>) {
-  if (!animatedView || !fadeInDown || !useReducedMotionHook) return <View style={style}>{children}</View>;
-  return <AnimatedEntrance style={style} delay={delay} distance={distance}>{children}</AnimatedEntrance>;
+export function FadeInView({ children, style, delay = 0, distance = 10, onLayout }: PropsWithChildren<FadeInViewProps>) {
+  if (!animatedView || !fadeInDown || !useReducedMotionHook) return <View style={style} onLayout={onLayout}>{children}</View>;
+  return <AnimatedEntrance style={style} delay={delay} distance={distance} onLayout={onLayout}>{children}</AnimatedEntrance>;
 }
 
-function AnimatedEntrance({ children, style, delay, distance }: PropsWithChildren<Required<Pick<FadeInViewProps, 'delay' | 'distance'>> & Pick<FadeInViewProps, 'style'>>) {
+function AnimatedEntrance({ children, style, delay, distance, onLayout }: PropsWithChildren<Required<Pick<FadeInViewProps, 'delay' | 'distance'>> & Pick<FadeInViewProps, 'style' | 'onLayout'>>) {
   const reduceMotion = useReducedMotionHook?.() ?? false;
-  if (reduceMotion) return <View style={style}>{children}</View>;
-  const EnteringView = animatedView as unknown as React.ComponentType<{ entering?: unknown; style?: StyleProp<ViewStyle>; children?: React.ReactNode }>;
+  if (reduceMotion) return <View style={style} onLayout={onLayout}>{children}</View>;
+  const EnteringView = animatedView as unknown as React.ComponentType<{ entering?: unknown; style?: StyleProp<ViewStyle>; children?: React.ReactNode; onLayout?: (event: LayoutChangeEvent) => void }>;
   const entering = (fadeInDown as AnyRecord)?.duration(180)?.delay(delay)?.withInitialValues({ transform: [{ translateY: distance }] });
   return (
-    <EnteringView entering={entering} style={style}>
+    <EnteringView entering={entering} style={style} onLayout={onLayout}>
       {children}
     </EnteringView>
   );

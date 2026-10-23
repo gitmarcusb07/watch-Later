@@ -14,7 +14,7 @@ import { FranchiseCard } from '@/components/franchise/FranchiseCard';
 import { GenreCard } from '@/components/genres/GenreCard';
 import { SectionHeader } from '@/components/common/SectionHeader';
 import { mediaRouteId } from '@/features/catalog/mediaIdentity';
-import { franchisesForHome } from '@/features/franchises/catalog';
+import { homeFranchises } from '@/features/franchises/catalog';
 import { GENRES } from '@/features/genres/catalog';
 import { useContinueWatching, useWatchedLibrary, useWatchlist, watchKeys } from '@/features/watchState/hooks';
 import { useImdbTop, useRecentlyReleased } from '@/features/catalog/hooks';
@@ -80,7 +80,7 @@ export default function HomeScreen() {
           <AppText variant="heading2">{watchlistCount}</AppText>
           <AppText variant="caption" muted>To watch</AppText>
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Open watched, ${watchedCount} titles`} onPress={() => { triggerLightHaptic(); router.push('/(tabs)/watched'); }} style={({ pressed }) => [styles.stat, pressed && styles.pressed]}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Open watched, ${watchedCount} titles`} onPress={() => { triggerLightHaptic(); router.push({ pathname: '/(tabs)/watched', params: { tab: 'completed' } } as never); }} style={({ pressed }) => [styles.stat, pressed && styles.pressed]}>
           <Ionicons name="checkmark-circle" size={18} color={colors.success} />
           <AppText variant="heading2">{watchedCount}</AppText>
           <AppText variant="caption" muted>Watched</AppText>
@@ -151,7 +151,7 @@ export default function HomeScreen() {
         <SectionHeader title="Franchises" subtitle="Movie & show universes, in order" />
         <Pressable accessibilityRole="button" accessibilityLabel="See all franchise collections" onPress={() => router.push('/franchises' as never)} style={styles.seeAll}><AppText variant="label" style={styles.seeAllText}>See all</AppText><Ionicons name="chevron-forward" size={15} color={colors.accent} /></Pressable>
       </View>
-      <FlatList horizontal data={franchisesForHome(8)} keyExtractor={(entry) => entry.slug} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.carousel} renderItem={({ item }) =>
+      <FlatList horizontal data={homeFranchises} keyExtractor={(entry) => entry.slug} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.carousel} renderItem={({ item }) =>
         <FranchiseCard
           title={item.title}
           itemCount={item.items.length}

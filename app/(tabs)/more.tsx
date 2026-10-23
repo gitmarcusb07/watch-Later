@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import { useClerk } from '@clerk/expo';
 import { Ionicons } from '@expo/vector-icons';
 import { Animated, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
@@ -26,9 +27,9 @@ import type { SyncStatus } from '@/domain/models/sync';
 /** Rows hidden while accounts/notifications are off. Screens and logic stay. */
 const HIDDEN_MORE_ROWS = new Set(['Notifications', 'Global Hits', 'Upcoming on OTT']);
 
-const groups: { title: string; rows: { label: string; detail: string; icon: keyof typeof Ionicons.glyphMap; route: string; hint: string }[] }[] = [  { title: 'PREFERENCES', rows: [{ label: 'Notifications', detail: 'Reminders', icon: 'notifications-outline', route: '/settings/notifications', hint: 'Open Notification settings' }] },
+const groups: { title: string; rows: { label: string; detail: string; icon: keyof typeof Ionicons.glyphMap; route: string; hint: string; beta?: boolean }[] }[] = [  { title: 'PREFERENCES', rows: [{ label: 'Notifications', detail: 'Reminders', icon: 'notifications-outline', route: '/settings/notifications', hint: 'Open Notification settings' }] },
   { title: 'LIBRARY', rows: [{ label: 'Favorites', detail: 'Your favorite titles', icon: 'heart-outline', route: '/favorites', hint: 'Open Favorites' }] },
-  { title: 'CREATE', rows: [{ label: 'Creator Studio', detail: 'Instagram-ready posts from your library', icon: 'color-wand-outline', route: '/creator', hint: 'Open Creator Studio' }] },
+  { title: 'CREATE', rows: [{ label: 'Creator Studio', detail: 'Instagram-ready posts from your library', icon: 'color-wand-outline', route: '/creator', hint: 'Open Creator Studio (beta)', beta: true }] },
   { title: 'DISCOVER', rows: [{ label: 'Franchise Collections', detail: 'Movies & shows in order', icon: 'albums-outline', route: '/franchises', hint: 'Open franchise collections' }, { label: 'Global Hits', detail: 'Coming soon', icon: 'globe-outline', route: '/global-hits', hint: 'Open Global Hits rankings' }, { label: 'Top 250', detail: 'Top-rated movies & series', icon: 'star-outline', route: '/imdb-top', hint: 'Open Top 250' }, { label: 'Upcoming on OTT', detail: 'Coming soon', icon: 'cloud-outline', route: '/ott-upcoming', hint: 'Open Upcoming on OTT' }, { label: 'New Releases', detail: 'Fresh movies and shows', icon: 'sparkles-outline', route: '/new-releases', hint: 'Open New Releases' }, { label: 'Top 100', detail: 'The highest-rated titles', icon: 'trophy-outline', route: '/top-100', hint: 'Open Top 100' }] },
   { title: 'ABOUT', rows: [{ label: 'About Watch Later', detail: 'A little about this app', icon: 'information-circle-outline', route: '/about', hint: 'Open About Watch Later' }, { label: 'Privacy & terms', detail: 'Your data, your choice', icon: 'shield-checkmark-outline', route: '/privacy', hint: 'Open Privacy and Terms' }] },
 ];
@@ -78,7 +79,7 @@ type RowTone = 'default' | 'accent' | 'danger';
  * pressed-state highlight — the same feel the other tabs get from their
  * buttons, so More no longer reads as a static list.
  */
-function MoreRow({ label, detail, icon, hint, tone = 'default', hideChevron = false, disabled = false, onPress }: {
+function MoreRow({ label, detail, icon, hint, tone = 'default', hideChevron = false, disabled = false, beta = false, onPress }: {
   label: string;
   detail: string;
   icon: keyof typeof Ionicons.glyphMap;
@@ -86,6 +87,7 @@ function MoreRow({ label, detail, icon, hint, tone = 'default', hideChevron = fa
   tone?: RowTone;
   hideChevron?: boolean;
   disabled?: boolean;
+  beta?: boolean;
   onPress: () => void;
 }) {
   const { pressScaleStyle, pressIn, pressOut } = usePressScale(0.985);
@@ -106,7 +108,10 @@ function MoreRow({ label, detail, icon, hint, tone = 'default', hideChevron = fa
       >
         <Ionicons name={icon} size={20} color={iconColor} />
         <View style={styles.rowCopy}>
-          <AppText variant="bodyMedium" style={titleColor}>{label}</AppText>
+          <View style={styles.rowTitle}>
+            <AppText variant="bodyMedium" style={titleColor}>{label}</AppText>
+            {beta ? <View style={styles.betaTag}><AppText style={styles.betaTagText}>BETA</AppText></View> : null}
+          </View>
           <AppText variant="caption" muted>{detail}</AppText>
         </View>
         {hideChevron ? null : <Ionicons name="chevron-forward" size={17} color={colors.textMuted} />}
@@ -265,7 +270,7 @@ export default function MoreScreen() {
         <View style={styles.group}>
           <AppText variant="caption" style={styles.groupTitle}>{group.title}</AppText>
           <View style={styles.groupCard}>
-            {group.rows.map((row) => <MoreRow key={row.label} label={row.label} detail={row.detail} icon={row.icon} hint={row.hint} onPress={() => router.push(row.route as never)} />)}
+            {group.rows.map((row) => <MoreRow key={row.label} label={row.label} detail={row.detail} icon={row.icon} hint={row.hint} beta={row.beta} onPress={() => router.push(row.route as never)} />)}
           </View>
         </View>
       </FadeInView>
@@ -277,7 +282,7 @@ export default function MoreScreen() {
       </View></View>
     </FadeInView>
     {session.mode === 'authenticated' ? <FadeInView delay={stagger + 55}><View style={styles.group}><AppText variant="caption" style={styles.groupTitle}>ACCOUNT</AppText><View style={styles.groupCard}><View style={styles.row}><Ionicons name={status.icon} size={20} color={status.color} /><View style={styles.rowCopy}><AppText variant="bodyMedium">{status.label}</AppText><AppText variant="caption" muted>{status.detail}</AppText></View></View><View style={styles.actions}><AppButton label={retryLabel ? 'Try again' : 'Sync now'} onPress={() => void syncNow()} loading={busy || sync.status === 'syncing'} variant="secondary" icon={<Ionicons name="sync-outline" size={17} color={colors.textPrimary} />} /><AppButton label="Sign out" onPress={() => void signOut()} disabled={busy} variant="ghost" icon={<Ionicons name="log-out-outline" size={17} color={colors.textSecondary} />} /><MoreRow label="Delete account" detail="Removes your data everywhere" icon="trash-outline" tone="danger" hideChevron disabled={busy} hint="Requires typing your email to confirm" onPress={() => setDeleteOpen(true)} /></View><DeleteAccountDialog visible={deleteOpen} email={session.mode === 'authenticated' ? session.email : ''} busy={busy} onClose={() => setDeleteOpen(false)} onConfirm={() => void confirmDeleteAccount()} /></View></View></FadeInView> : null}
-    <FadeInView delay={stagger + 110}><AppText variant="caption" muted style={styles.version}>WATCH LATER · VERSION 1.0</AppText></FadeInView>
+    <FadeInView delay={stagger + 110}><AppText variant="caption" muted style={styles.version}>WATCH LATER · VERSION {Constants.expoConfig?.version ?? '1.0.0'}</AppText></FadeInView>
   </Screen>;
 }
-const styles = StyleSheet.create({ top: { paddingTop: spacing.lg, paddingBottom: spacing.xl, gap: spacing.xs }, profile: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, gap: spacing.md, backgroundColor: colors.surface, borderRadius: radius.large, borderWidth: 1, borderColor: colors.border, marginBottom: spacing.xl }, avatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border }, avatarText: { color: colors.accent, letterSpacing: 0.5 }, profileCopy: { flex: 1, gap: 4 }, statusLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs }, statusDot: { width: 7, height: 7, borderRadius: 4 }, group: { marginBottom: spacing.xl }, groupTitle: { color: colors.textMuted, letterSpacing: 1, marginBottom: spacing.sm, marginLeft: spacing.xs }, groupCard: { backgroundColor: colors.surface, borderRadius: radius.medium, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' }, row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, minHeight: 66, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, rowCopy: { flex: 1, gap: 2 }, actions: { gap: spacing.xs, padding: spacing.md }, rowDisabled: { opacity: 0.45 }, dangerText: { color: colors.error }, pressed: { backgroundColor: colors.surfaceElevated }, version: { textAlign: 'center', paddingBottom: spacing.xl, letterSpacing: 0.8 } });
+const styles = StyleSheet.create({ top: { paddingTop: spacing.lg, paddingBottom: spacing.xl, gap: spacing.xs }, profile: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, gap: spacing.md, backgroundColor: colors.surface, borderRadius: radius.large, borderWidth: 1, borderColor: colors.border, marginBottom: spacing.xl }, avatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.surfaceElevated, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border }, avatarText: { color: colors.accent, letterSpacing: 0.5 }, profileCopy: { flex: 1, gap: 4 }, statusLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs }, statusDot: { width: 7, height: 7, borderRadius: 4 }, group: { marginBottom: spacing.xl }, groupTitle: { color: colors.textMuted, letterSpacing: 1, marginBottom: spacing.sm, marginLeft: spacing.xs }, groupCard: { backgroundColor: colors.surface, borderRadius: radius.medium, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' }, row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, minHeight: 66, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, rowCopy: { flex: 1, gap: 2 }, rowTitle: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, betaTag: { borderRadius: radius.pill, backgroundColor: colors.warning, paddingHorizontal: 6, paddingVertical: 1 }, betaTagText: { color: '#1A1206', fontSize: 8.5, lineHeight: 11, fontWeight: '900', letterSpacing: 0.8 }, actions: { gap: spacing.xs, padding: spacing.md }, rowDisabled: { opacity: 0.45 }, dangerText: { color: colors.error }, pressed: { backgroundColor: colors.surfaceElevated }, version: { textAlign: 'center', paddingBottom: spacing.xl, letterSpacing: 0.8 } });

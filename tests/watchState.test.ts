@@ -205,6 +205,61 @@ describe('Phase 4 SQLite watch state', () => {
     expect(await repository.getLibraryStatuses([series])).toMatchObject({ [series.id]: { watchlisted: false, complete: true } });
   });
 
+  it('marks only aired episodes when toggling a weekly season', async () => {
+    const series = {
+      ...createSeries(),
+      numberOfEpisodes: 8,
+      seasonSummaries: [{ seasonNumber: 1, name: 'Season 1', episodeCount: 8 }],
+    };
+    const episodes = Array.from({ length: 8 }, (_, index) => ({
+      ...createEpisode(series, index + 1),
+      airDate: index < 2 ? '2020-01-01' : '2999-01-01',
+    }));
+    const season = { ...createSeason(series, episodes), episodeCount: 8 };
+    await repository.addToWatchlist(series);
+    await repository.setSeasonWatched(series, season, true);
+
+    expect(await repository.getWatchedEpisodeIds(series, 1)).toEqual(['1001', '1002']);
+    expect((await repository.getCachedSeason(series, 1))?.episodes).toHaveLength(8);
+    const progress = (await repository.getSeriesProgress()).find((item) => item.media.id === series.id);
+    expect(progress).toMatchObject({ watchedEpisodeCount: 2, totalEpisodeCount: 8, isComplete: false });
+    expect(await repository.isSeriesTracked(series)).toBe(true);
+    // A part-watched show stays on the watchlist instead of disappearing into
+    // Completed before its remaining episodes have even aired.
+    expect((await repository.getWatchlist()).map(({ media }) => media.id)).toEqual([series.id]);
+    expect(await repository.getWatchedLibrary()).toHaveLength(0);
+  });
+
+  it('repairs future episode watches left by an older build', async () => {
+    const series = {
+      ...createSeries(),
+      numberOfEpisodes: 8,
+      seasonSummaries: [{ seasonNumber: 1, name: 'Season 1', episodeCount: 8 }],
+    };
+    const episodes = Array.from({ length: 8 }, (_, index) => ({
+      ...createEpisode(series, index + 1),
+      airDate: index < 2 ? '2020-01-01' : '2999-01-01',
+    }));
+    const season = { ...createSeason(series, episodes), episodeCount: 8 };
+    await repository.setSeasonWatched(series, season, true);
+    // Simulate the old "mark whole season" write: every cached row watched and
+    // the series flagged complete.
+    await adapter.database.runAsync('UPDATE tracked_episodes SET watched_at = CURRENT_TIMESTAMP WHERE series_id = ?', series.id);
+    await adapter.database.runAsync('UPDATE tracked_series SET completed = 1 WHERE media_id = ?', series.id);
+
+    expect(await repository.repairUnairedEpisodeWatches()).toBe(6);
+
+    expect(await repository.getWatchedEpisodeIds(series, 1)).toEqual(['1001', '1002']);
+    const progress = (await repository.getSeriesProgress()).find((item) => item.media.id === series.id);
+    expect(progress).toMatchObject({ watchedEpisodeCount: 2, isComplete: false });
+    expect(await repository.getLibraryStatuses([series])).toMatchObject({ [series.id]: { complete: false } });
+    expect(await repository.getPendingChanges()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: 'episode', deleted: true }),
+      expect.objectContaining({ entityType: 'series', entityKey: series.id, completed: false }),
+    ]));
+    expect(await repository.repairUnairedEpisodeWatches()).toBe(0);
+  });
+
   it('keeps an in-progress series in the watchlist and out of the watched library', async () => {
     const series = createSeries();
     const season = createSeason(series, [1, 2, 3].map((number) => createEpisode(series, number)));
@@ -349,6 +404,25 @@ describe('Phase 4 SQLite watch state', () => {
     expect(await adapter.database.getFirstAsync('SELECT 1 AS found FROM tracked_episodes WHERE series_id = ? AND watched_at IS NOT NULL', series.id)).toBeNull();
   });
 
+  it('restores exactly the episodes that were watched when Undo clears progress', async () => {
+    const series = createSeries();
+    const episodes = [1, 2, 3, 4].map((number) => createEpisode(series, number));
+    const season = createSeason(series, episodes);
+    await repository.setEpisodeWatched(series, season, episodes[0], true);
+    await repository.setEpisodeWatched(series, season, episodes[2], true);
+    const snapshot = await repository.getWatchedEpisodeSnapshot(series);
+    expect(snapshot.map((episode) => episode.episodeNumber)).toEqual([1, 3]);
+
+    await repository.setSeriesWatched(series, [], false);
+    expect(await repository.getWatchedEpisodeIds(series, 1)).toEqual([]);
+
+    await repository.restoreWatchedEpisodes(series, snapshot);
+    expect(await repository.getWatchedEpisodeIds(series, 1)).toEqual([episodes[0].providerId, episodes[2].providerId]);
+    expect((await repository.getSeriesProgress())[0]?.nextEpisode?.episodeNumber).toBe(2);
+    const first = await adapter.database.getFirstAsync<{ watched_at: string }>('SELECT watched_at FROM tracked_episodes WHERE id = ?', snapshot[0].id);
+    expect(first?.watched_at).toBe(snapshot[0].watchedAt);
+  });
+
   it('rolls back season mutations atomically if episode metadata conflicts', async () => {
     const series = createSeries();
     const duplicatePosition = createSeason(series, [createEpisode(series, 1), { ...createEpisode(series, 1), providerId: 'other-real-id' }]);
@@ -402,6 +476,9 @@ describe('Phase 4 SQLite watch state', () => {
     expect(await repository.getAnimeWatchedCount(anime)).toBe(0);
     await repository.setAnimeWatchedCount(anime, 7);
     expect(await repository.getAnimeWatchedCount(anime)).toBe(7);
+    await repository.setSeriesWatched(anime, [], false);
+    expect(await repository.getAnimeWatchedCount(anime)).toBe(0);
+    expect((await repository.getSeriesProgress()).find((item) => item.media.id === anime.id)).toMatchObject({ watchedEpisodeCount: 0, isComplete: false });
     await repository.setAnimeWatchedCount(anime, -3);
     expect(await repository.getAnimeWatchedCount(anime)).toBe(0);
     await expect(repository.setAnimeWatchedCount(createMovie(46), 2)).rejects.toMatchObject({ kind: 'validation' });
@@ -591,10 +668,50 @@ describe('library backup export/import', () => {
     expect(await repository.isFavorite({ provider: 'tmdb', mediaType: 'movie', providerId: '9' })).toBe(true);
   });
 
+  it('queues restored rows so a stale sync queue cannot undo a backup import', async () => {
+    const movie = createMovie(13);
+    await repository.addToWatchlist(movie);
+    const backup = await repository.exportLibrary();
+    await adapter.database.runAsync('DELETE FROM sync_queue');
+
+    await repository.importLibrary(backup);
+    const pending = await repository.getPendingChanges();
+    expect(pending).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: 'watchlist', entityKey: movie.id }),
+    ]));
+    expect(pending.find((change) => change.entityType === 'watchlist')?.media.id).toBe(movie.id);
+  });
+
   it('rejects files that are not Watch Later backups', async () => {
     await expect(repository.importLibrary({} as never)).rejects.toThrow('not a Watch Later backup');
     await expect(repository.importLibrary({ format: 'watch-later-backup', version: 999, tables: {} } as never))
       .rejects.toThrow('not a Watch Later backup');
+  });
+
+  it('rejects injected backup columns before wiping the library', async () => {
+    const movie = createMovie(11);
+    await repository.addToWatchlist(movie);
+    const backup = await repository.exportLibrary();
+    backup.tables.tracked_media[0] = {
+      ...backup.tables.tracked_media[0],
+      'id) VALUES (1); DROP TABLE tracked_media; --': 'x',
+    };
+
+    await expect(repository.importLibrary(backup)).rejects.toThrow('unknown column');
+    expect(await repository.getWatchlist()).toHaveLength(1);
+    expect(await repository.getWatchlist()).toMatchObject([{ media: { providerId: '11' } }]);
+  });
+
+  it('rejects structured values instead of passing them to SQLite', async () => {
+    const movie = createMovie(12);
+    await repository.addToWatchlist(movie);
+    const backup = await repository.exportLibrary();
+    backup.tables.tracked_media[0] = {
+      ...backup.tables.tracked_media[0],
+      overview: { nested: true },
+    };
+    await expect(repository.importLibrary(backup)).rejects.toThrow('unsupported value');
+    expect(await repository.getWatchlist()).toHaveLength(1);
   });
 });
 

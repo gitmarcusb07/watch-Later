@@ -116,10 +116,26 @@ export interface SeriesProgress {
   isComplete: boolean;
   lastWatchedAt?: string;
   nextEpisode?: MediaEpisode;
+  /**
+   * The next unwatched cached episodes in air order. Includes episodes that
+   * have not aired yet, so the Watching screen can show real release dates for
+   * episode 3 onward even when only the first two have dropped.
+   */
+  nextEpisodes?: MediaEpisode[];
   nextSeasonNumber?: number;
 }
 
 export type ContinueWatchingItem = SeriesProgress;
+
+/** Exact episode watch state captured before a destructive progress reset. */
+export interface WatchedEpisodeSnapshot {
+  id: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  providerId: string;
+  watchedAt: string;
+  rewatchCount: number;
+}
 
 export type WatchedLibraryItem =
   | { kind: 'movie'; watchedAt: string; media: CatalogMedia }
@@ -152,6 +168,9 @@ export interface WatchStateRepository {
    */
   setAnimeWatchedCount(media: CatalogMedia, count: number): Promise<void>;
   getAnimeWatchedCount(identity: MediaIdentity): Promise<number>;
+  /** Used by the 5-second Undo after clearing series progress. */
+  getWatchedEpisodeSnapshot(identity: MediaIdentity): Promise<WatchedEpisodeSnapshot[]>;
+  restoreWatchedEpisodes(media: CatalogMedia, snapshot: WatchedEpisodeSnapshot[]): Promise<void>;
   getEpisodeWatched(identity: MediaIdentity): Promise<boolean>;
   getWatchedEpisodeIds(seriesIdentity: MediaIdentity, seasonNumber: number): Promise<string[]>;
   getSeriesProgress(): Promise<SeriesProgress[]>;

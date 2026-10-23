@@ -1,11 +1,14 @@
-import { Pressable, StyleSheet } from 'react-native';
+import { Animated, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { AppText } from '@/components/common/AppText';
 import { showDialog, showToast } from '@/components/feedback/AppDialog';
 import type { CatalogMedia } from '@/domain/models/media';
 import { useInterestedMutation, useInterestedStatus } from '@/features/watchState/hooks';
 import { setUpcomingReminder } from '@/features/notifications/upcomingReminders';
 import { triggerLightHaptic, triggerSuccessHaptic } from '@/lib/haptics';
+import { usePressMotion } from '@/lib/pressMotion';
+import { actionPalette } from '@/theme/actionPalette';
 import { colors, radius, spacing } from '@/theme';
 
 /**
@@ -18,6 +21,8 @@ export function NotifyMeButton({ media }: { media: CatalogMedia }) {
   const status = useInterestedStatus(identity);
   const mutation = useInterestedMutation(media, status.data ?? false);
   const active = status.data ?? false;
+  const palette = actionPalette('notify');
+  const motion = usePressMotion('wobble', 0.96);
 
   async function toggle() {
     if (status.isLoading || mutation.isPending) return;
@@ -54,14 +59,19 @@ export function NotifyMeButton({ media }: { media: CatalogMedia }) {
       accessibilityRole="button"
       accessibilityLabel={active ? `Stop notifying about ${media.title}` : `Notify me about ${media.title} on release`}
       accessibilityState={{ selected: active, busy: mutation.isPending, disabled: status.isLoading }}
-      onPress={() => void toggle()}
+      onPress={() => { motion.play(); void toggle(); }}
+      onPressIn={motion.pressIn}
+      onPressOut={motion.pressOut}
       disabled={status.isLoading || mutation.isPending}
-      style={({ pressed }) => [styles.button, active && styles.buttonActive, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.button, { borderColor: active ? palette.color : palette.border, backgroundColor: active ? 'transparent' : palette.soft }, pressed && styles.pressed]}
     >
-      <Ionicons name={active ? 'notifications' : 'notifications-outline'} size={17} color={active ? colors.white : colors.accent} />
-      <AppText variant="button" style={active ? styles.labelActive : styles.label} numberOfLines={1}>
-        {active ? 'Reminder on' : 'Notify me on release'}
-      </AppText>
+      {active ? <LinearGradient colors={palette.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} /> : null}
+      <Animated.View style={[styles.content, motion.pressMotionStyle]}>
+        <Ionicons name={active ? 'notifications' : 'notifications-outline'} size={17} color={active ? palette.onColor : palette.color} />
+        <AppText variant="button" style={[styles.label, { color: active ? palette.onColor : palette.color }]} numberOfLines={1}>
+          {active ? 'Reminder on' : 'Notify me on release'}
+        </AppText>
+      </Animated.View>
     </Pressable>
   );
 }
@@ -71,9 +81,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     minHeight: 50, borderRadius: radius.pill, backgroundColor: colors.surface,
     borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.lg, marginTop: spacing.md,
+    overflow: 'hidden',
   },
-  buttonActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  content: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   label: { color: colors.accent, fontSize: 14 },
-  labelActive: { color: colors.white },
   pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
 });

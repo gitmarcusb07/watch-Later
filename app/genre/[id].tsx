@@ -104,7 +104,7 @@ export default function GenreScreen() {
           </Pressable>
         ))}
       </View>
-      {query.isLoading && !items.length ? <FlatList data={[0, 1, 2, 3, 4, 5, 6, 7, 8]} keyExtractor={(item) => String(item)} numColumns={3} columnWrapperStyle={styles.gridRow} contentContainerStyle={styles.grid} style={styles.flat} renderItem={() => <PosterSkeleton />} showsVerticalScrollIndicator={false} />
+      {query.isLoading && !items.length ? <FlatList data={[0, 1, 2, 3, 4, 5, 6, 7, 8]} keyExtractor={(item) => String(item)} numColumns={3} columnWrapperStyle={styles.gridRow} contentContainerStyle={styles.grid} style={styles.flat} renderItem={() => <PosterSkeleton width={cardWidth} />} showsVerticalScrollIndicator={false} />
         : query.isError && !items.length ? <ErrorView message={query.error instanceof CatalogError ? query.error.userMessage : `Could not load ${genre.name} titles. Check your connection and try again.`} onRetry={() => void query.refetch()} />
         : items.length ? <FlatList
           data={items}

@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { FlatList, Image, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { FlatList, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppText } from '@/components/common/AppText';
+import { RemoteImage } from '@/components/common/RemoteImage';
 import { Screen } from '@/components/common/Screen';
 import { FadeInView } from '@/components/common/FadeInView';
 import { IconButton } from '@/components/buttons/IconButton';
@@ -65,12 +66,16 @@ export default function FranchiseDetailScreen() {
         contentContainerStyle={styles.grid}
         style={styles.flat}
         showsVerticalScrollIndicator={false}
-        initialNumToRender={9}
+        initialNumToRender={6}
+        maxToRenderPerBatch={9}
+        updateCellsBatchingPeriod={30}
+        windowSize={7}
+        removeClippedSubviews
         ListHeaderComponent={
           <View style={styles.heroWrap}>
             <FadeInView>
               <View style={styles.backdrop}>
-                {backdropUri ? <Image source={{ uri: backdropUri }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+                {backdropUri ? <RemoteImage uri={backdropUri} style={StyleSheet.absoluteFill} /> : null}
                 <View style={styles.scrim} />
                 <View style={styles.backdropCopy}>
                   <AppText variant="heading1" style={styles.heroTitle}>{franchise.title}</AppText>

@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppState, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { queryClient } from "@/lib/query/queryClient";
+import { installNavigationGuard } from "@/lib/navigationGuard";
 import { colors } from "@/theme";
 import { logger } from "@/lib/logger";
 import { hydrateSession, persistSession } from "@/store/app/sessionPersistence";
@@ -46,7 +47,7 @@ import {
   refreshUpcomingReminders,
   resolveNotificationTarget,
 } from "@/features/notifications/upcomingReminders";
-import { watchStateSyncRepository } from "@/data/local/repositories/SqliteWatchStateRepository";
+import { watchStateRepository, watchStateSyncRepository } from "@/data/local/repositories/SqliteWatchStateRepository";
 import { ClerkSupabaseBridge } from "@/features/auth/ClerkSupabaseBridge";
 import { isAuthFlowInFlight } from "@/features/auth/SupabaseAuthService";
 import { showFriendlyError } from "@/lib/friendlyError";
@@ -65,6 +66,9 @@ if (!publishableKey) {
 }
 
 const database = new SqliteDatabaseRepository();
+
+// One-time router wrapper: double taps on cards/buttons must open a screen once.
+installNavigationGuard();
 
 // Keep the native splash up until the JS splash has rendered its first frame.
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
@@ -97,7 +101,17 @@ export default function RootLayout() {
     void useTvPreferences.getState().hydrate();
     void database
       .initialize()
-      .then(() => setDatabaseReady(true))
+      .then(async () => {
+        // Older builds marked future weekly episodes when finishing a show.
+        // Repair once before the UI reads progress so those titles no longer
+        // appear completed; the queue keeps sync from restoring them.
+        try {
+          await watchStateRepository.repairUnairedEpisodeWatches();
+        } catch (error) {
+          logger.error("Episode progress repair failed", error);
+        }
+        setDatabaseReady(true);
+      })
       .catch((error: unknown) => {
         logger.error("Database startup failed", error);
         setStartupError(true);
@@ -273,7 +287,7 @@ export default function RootLayout() {
                     screenOptions={{
                       headerShown: false,
                       contentStyle: { backgroundColor: colors.background },
-                      animation: "fade",
+                      animation: "slide_from_right",
                     }}
                   >
                     <Stack.Screen name="index" />
@@ -296,7 +310,7 @@ export default function RootLayout() {
                 {!splashDone ? (
                   <SplashScreenView
                     isReady={appReady}
-                    minDuration={4000}
+                    minDuration={3500}
                     onClap={() =>
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy)
                     }

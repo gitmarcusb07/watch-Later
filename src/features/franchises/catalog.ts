@@ -88,6 +88,9 @@ export function franchisesForHome(limit = 8): FranchiseCollection[] {
   }).slice(0, limit);
 }
 
+/** The home carousel is static catalog data, so rank it once at module load. */
+export const homeFranchises = franchisesForHome(8);
+
 function itemTier(entry: FranchiseCollection, query: string): number {
   let tier = 4;
   for (const item of entry.items) {

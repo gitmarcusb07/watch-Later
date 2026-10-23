@@ -118,6 +118,11 @@ describe('anime TMDB episode path', () => {
     refTmdbSeriesId: '37854',
   };
 
+  beforeEach(() => {
+    // A partial TMDB season now asks AniList for its future schedule.
+    jest.spyOn(anilistClient, 'getAnime').mockResolvedValue(animeDto());
+  });
+
   it('prefers TMDB episodes with real titles and stills', async () => {
     jest.spyOn(tmdbClient, 'getSeason').mockResolvedValue({
       id: 1001,

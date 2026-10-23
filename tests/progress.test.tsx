@@ -2,6 +2,7 @@ import { act, create } from 'react-test-renderer';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query/queryClient';
 import { AppError } from '@/domain/errors/AppError';
+import { CatalogError } from '@/domain/errors/CatalogError';
 import type { CatalogMedia, CatalogSeason } from '@/domain/models/media';
 import { mapTmdbMovie, mapTmdbTv } from '@/data/remote/tmdb/mappers';
 import { mapAniListAnime, syntheticAnimeSeason } from '@/data/remote/anilist/mappers';
@@ -127,6 +128,77 @@ describe('finishTitle', () => {
     expect(finished).toEqual([{ watched: true, count: 3 }]);
   });
 
+  it('retries a rate-limited season so a long show is not left half-finished', async () => {
+    const parent = {
+      ...series(),
+      numberOfSeasons: 2,
+      numberOfEpisodes: 6,
+      seasonSummaries: [
+        { seasonNumber: 1, name: 'Season 1', episodeCount: 3 },
+        { seasonNumber: 2, name: 'Season 2', episodeCount: 3 },
+      ],
+    };
+    let seasonTwoAttempts = 0;
+    const finished: { count: number }[] = [];
+    await finishTitle(parent, {
+      getFullMedia: async () => parent,
+      getSeason: async (_media, seasonNumber) => {
+        if (seasonNumber === 2) {
+          seasonTwoAttempts += 1;
+          if (seasonTwoAttempts === 1) throw new CatalogError('tmdb', 'rate_limited', 429);
+        }
+        const base = seasonOf(parent);
+        return {
+          ...base,
+          seasonNumber,
+          name: `Season ${seasonNumber}`,
+          episodes: base.episodes.map((episode, index) => ({ ...episode, seasonNumber, episodeNumber: index + 1 })),
+        };
+      },
+      repo: {
+        markMovieWatched: async () => undefined,
+        startTrackingSeries: async () => undefined,
+        setSeriesWatched: async (_media: CatalogMedia, seasons: CatalogSeason[]) => { finished.push({ count: seasons.flatMap((season) => season.episodes).length }); },
+      } as never,
+    });
+    expect(seasonTwoAttempts).toBe(2);
+    expect(finished).toEqual([{ count: 6 }]);
+  });
+
+  it('marks only aired episodes when finishing a weekly series', async () => {
+    const { adapter, ready } = setupRepository();
+    const repository = await ready;
+    const parent = {
+      ...series(),
+      numberOfEpisodes: 8,
+      seasonSummaries: [{ seasonNumber: 1, name: 'Season 1', episodeCount: 8 }],
+    };
+    const season = seasonOf(parent, 8);
+    season.episodes = season.episodes.map((episode, index) => ({
+      ...episode,
+      airDate: index < 2 ? '2020-01-01' : '2999-01-01',
+    }));
+    try {
+      await finishTitle(parent, {
+        getFullMedia: async () => parent,
+        getSeason: async () => season,
+        repo: repository,
+      });
+      expect(await repository.getWatchedEpisodeIds(parent, 1)).toEqual(['420101', '420102']);
+      expect((await repository.getCachedSeason(parent, 1))?.episodes).toHaveLength(8);
+      const progress = (await repository.getSeriesProgress()).find((item) => item.media.id === parent.id);
+      expect(progress).toMatchObject({
+        watchedEpisodeCount: 2,
+        totalEpisodeCount: 8,
+        isComplete: false,
+        nextEpisode: expect.objectContaining({ episodeNumber: 3 }),
+      });
+      expect(await repository.getLibraryStatuses([parent])).toMatchObject({ [parent.id]: { complete: false } });
+    } finally {
+      adapter.close();
+    }
+  });
+
   it('tracks anime and marks it complete without inventing episode data', async () => {
     const tracked: string[] = [];
     const completed: string[] = [];
@@ -209,6 +281,23 @@ describe('markUpToHere', () => {
     const repository = await ready;
     await expect(repository.markEpisodesUpTo(series(), seasonOf(series()), 0)).rejects.toThrow('valid season');
     adapter.close();
+  });
+
+  it('never marks episodes from a season that has not started airing', async () => {
+    const parent = series();
+    const future = {
+      ...seasonOf(parent),
+      episodes: seasonOf(parent).episodes.map((episode) => ({ ...episode, airDate: '2999-01-01' })),
+    };
+    await expect(markUpToHere(parent, 1, 2, {
+      getFullMedia: async () => parent,
+      getSeason: async () => future,
+      repo: {
+        getCachedSeason: async () => future,
+        storeSeason: async () => undefined,
+        markEpisodesUpTo: async () => { throw new Error('must not mark future episodes'); },
+      } as never,
+    })).rejects.toThrow('have aired yet');
   });
 
   it('tracks anime episodes individually exactly like series episodes', async () => {

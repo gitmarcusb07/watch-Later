@@ -139,6 +139,103 @@ describe('kitsu anime episode pipeline', () => {
     expect(page.episodes[0]).toMatchObject({ number: 1, title: 'Awakening' });
   });
 
+  it('keeps AniList future dates after the aired Kitsu episodes', async () => {
+    const identity = { provider: 'anilist', mediaType: 'anime', providerId: '21' } as const;
+    const summary = {
+      seasonNumber: 1,
+      name: 'Season 1',
+      episodeCount: 4,
+      refProviderId: '21',
+      futureEpisodes: [
+        { episodeNumber: 3, airDate: '2026-10-23' },
+        { episodeNumber: 4, airDate: '2026-10-30' },
+      ],
+    };
+    jest.spyOn(kitsuClient, 'resolveAnimeId').mockResolvedValue('12');
+    jest.spyOn(kitsuClient, 'getAllEpisodes').mockResolvedValue([
+      { number: 1, title: 'First', aired: '2026-10-09' },
+      { number: 2, title: 'Second', aired: '2026-10-16' },
+    ]);
+    const getAnime = jest.spyOn(anilistClient, 'getAnime');
+
+    const season = await new RemoteCatalogRepository().getAnimeSeasonByRef(identity, summary);
+    expect(season.episodes.map((episode) => [episode.episodeNumber, episode.airDate])).toEqual([
+      [1, '2026-10-09'],
+      [2, '2026-10-16'],
+      [3, '2026-10-23'],
+      [4, '2026-10-30'],
+    ]);
+    expect(season.episodes[2]).toMatchObject({
+      provider: 'anilist',
+      mediaType: 'anime',
+      providerId: '21-s1e3',
+      seasonNumber: 1,
+      episodeNumber: 3,
+      title: 'Episode 3',
+    });
+    expect(getAnime).not.toHaveBeenCalled();
+  });
+
+  it('asks AniList for future dates when an older summary has none', async () => {
+    const identity = { provider: 'anilist', mediaType: 'anime', providerId: '21' } as const;
+    jest.spyOn(kitsuClient, 'resolveAnimeId').mockResolvedValue('12');
+    jest.spyOn(kitsuClient, 'getAllEpisodes').mockResolvedValue([
+      { number: 1, title: 'First', aired: '2026-10-09' },
+      { number: 2, title: 'Second', aired: '2026-10-16' },
+    ]);
+    jest.spyOn(anilistClient, 'getAnime').mockResolvedValue({
+      id: 21,
+      title: { english: 'Airing Anime' },
+      episodes: 4,
+      status: 'RELEASING',
+      nextAiringEpisode: { episode: 3, airingAt: 1_792_764_000 },
+      airingSchedule: {
+        nodes: [
+          { episode: 3, airingAt: 1_792_764_000 },
+          { episode: 4, airingAt: 1_793_368_800 },
+        ],
+      },
+    } as never);
+
+    const season = await new RemoteCatalogRepository().getAnimeSeasonByRef(identity, {
+      seasonNumber: 1, name: 'Season 1', episodeCount: 4, refProviderId: '21',
+    });
+    expect(season.episodes).toHaveLength(4);
+    expect(season.episodes[2].airDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(season.episodes[3].airDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('fills missing dates when Kitsu already lists every episode', async () => {
+    const identity = { provider: 'anilist', mediaType: 'anime', providerId: '21' } as const;
+    jest.spyOn(kitsuClient, 'resolveAnimeId').mockResolvedValue('12');
+    jest.spyOn(kitsuClient, 'getAllEpisodes').mockResolvedValue([
+      { number: 1, title: 'First', aired: '2026-10-09' },
+      { number: 2, title: 'Second', aired: '2026-10-16' },
+      { number: 3, title: 'Third' },
+      { number: 4, title: 'Fourth' },
+    ]);
+    jest.spyOn(anilistClient, 'getAnime').mockResolvedValue({
+      id: 21,
+      title: { english: 'Airing Anime' },
+      episodes: 4,
+      status: 'RELEASING',
+      airingSchedule: {
+        nodes: [
+          { episode: 3, airingAt: 1_792_764_000 },
+          { episode: 4, airingAt: 1_793_368_800 },
+        ],
+      },
+    } as never);
+
+    const season = await new RemoteCatalogRepository().getAnimeSeasonByRef(identity, {
+      seasonNumber: 1, name: 'Season 1', episodeCount: 4, refProviderId: '21',
+    });
+    expect(season.episodes).toHaveLength(4);
+    expect(season.episodes[0].airDate).toBe('2026-10-09');
+    expect(season.episodes[2].airDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(season.episodes[3].airDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
   it('throws honest metadata errors only when no source has episodes', async () => {    jest.spyOn(kitsuClient, 'resolveAnimeId').mockResolvedValue(null);
     jest.spyOn(jikanClient, 'getAllEpisodes').mockRejectedValue(new Error('limited'));
     jest.spyOn(anilistClient, 'getAnime').mockResolvedValue({

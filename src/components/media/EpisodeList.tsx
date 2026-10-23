@@ -1,6 +1,7 @@
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppText } from '@/components/common/AppText';
+import { RemoteImage } from '@/components/common/RemoteImage';
 import type { MediaEpisode } from '@/domain/models/media';
 import { hasAired } from '@/features/catalog/upcoming';
 import { colors, radius, spacing } from '@/theme';
@@ -43,7 +44,7 @@ export function EpisodeList({ episodes = [], watchedIds = [], onToggleEpisode, o
             <View style={[styles.number, complete && styles.numberWatched]}>
               <AppText variant="caption" color={complete ? colors.background : colors.textSecondary}>{episode.episodeNumber}</AppText>
             </View>
-            {episode.stillUrl ? <Image source={{ uri: episode.stillUrl }} style={styles.still} resizeMode="cover" /> : null}
+            {episode.stillUrl ? <RemoteImage uri={episode.stillUrl} style={styles.still} /> : null}
             <View style={styles.copy}>
               <AppText variant="bodyMedium" color={locked ? colors.textSecondary : colors.textPrimary}>{episode.title || `Episode ${episode.episodeNumber}`}</AppText>
               {metadata ? <AppText variant="caption" muted>{metadata}</AppText> : null}

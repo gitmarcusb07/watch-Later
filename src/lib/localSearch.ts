@@ -32,7 +32,9 @@ function levenshtein(a: string, b: string): number {
 /** "Did you mean" over a small candidate corpus (trending + library titles). */
 export function suggestCorrection(query: string, candidates: readonly string[]): string | undefined {
   const normalized = normalizeLocalText(query);
-  if (!normalized || normalized.length < 3) return undefined;
+  // Pasted novels are not search queries. The cap keeps the edit-distance
+  // matrix small, so a huge paste can never stall the results screen.
+  if (!normalized || normalized.length < 3 || normalized.length > 80) return undefined;
   let best: string | undefined;
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {

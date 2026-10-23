@@ -1,9 +1,13 @@
+import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { CatalogMedia, CatalogSeason, MediaIdentity } from '@/domain/models/media';
+import type { CatalogMedia, CatalogSeason, MediaIdentity, SeasonSummary } from '@/domain/models/media';
 import type { InterestedCount, SeriesProgress, WatchPriority } from '@/domain/models/watchState';
+import { AppError } from '@/domain/errors/AppError';
 import { catalogRepository } from '@/data/remote/catalog/RemoteCatalogRepository';
 import { cloudWatchStateRepository } from '@/data/remote/supabase/SupabaseWatchStateRepository';
 import { watchStateRepository } from '@/data/local/repositories/SqliteWatchStateRepository';
+import { fetchCatalogSeason } from '@/features/catalog/hooks';
+import { formatReleaseDate, hasAired } from '@/features/catalog/upcoming';
 import { scheduleAutoSync } from '@/features/sync/autoSync';
 
 function maybePromptRating(_media: CatalogMedia): void {
@@ -48,6 +52,110 @@ export function useSeriesProgress() {
 
 export function useContinueWatching() {
   return useQuery({ queryKey: watchKeys.continue, queryFn: () => watchStateRepository.getContinueWatching() });
+}
+
+/**
+ * Provider season payloads often stop at the episodes that have already
+ * dropped. This warms the local schedule in the background so the Watching
+ * screen can show the date for episode 3 (and everything after it) even when
+ * only the first two episodes exist in the catalog.
+ *
+ * Attempts are throttled per season so a provider that genuinely exposes only
+ * aired episodes cannot turn into a request loop.
+ */
+const SCHEDULE_BACKFILL_TTL_MS = 60 * 60_000;
+const scheduleBackfillAttempts = new Map<string, number>();
+
+/** Lets pull-to-refresh ask for a fresh schedule without waiting out the TTL. */
+export function resetEpisodeScheduleBackfill(): void {
+  scheduleBackfillAttempts.clear();
+}
+
+export function useEpisodeScheduleBackfill(enabled = true) {
+  const queryClient = useQueryClient();
+  const progressQuery = useSeriesProgress();
+  const running = useRef(false);
+
+  useEffect(() => {
+    if (!enabled || running.current || !progressQuery.data?.length) return;
+    const candidates = progressQuery.data.filter((item) => {
+      if (item.isComplete || item.media.episodeMetadata !== 'available') return false;
+      if (!item.media.seasonSummaries?.length) return false;
+      // A complete cache already holds every release date we could show.
+      return item.totalEpisodeCount === undefined
+        || item.cachedEpisodeCount < item.totalEpisodeCount
+        || (item.nextEpisodes ?? []).some((episode) => !episode.airDate);
+    });
+    if (!candidates.length) return;
+
+    running.current = true;
+    let cancelled = false;
+
+    void (async () => {
+      let changed = false;
+      const jobs: { item: SeriesProgress; summary: SeasonSummary }[] = [];
+
+      for (const item of candidates.slice(0, 10)) {
+        if (jobs.length >= 12) break;
+        const ordered = [...(item.media.seasonSummaries ?? [])].sort((a, b) => a.seasonNumber - b.seasonNumber);
+        const focusNumber = item.nextSeasonNumber ?? item.nextEpisode?.seasonNumber;
+        const focusIndex = Math.max(0, ordered.findIndex((season) => season.seasonNumber === focusNumber));
+        const targets = [ordered[focusIndex], ordered[focusIndex + 1]].filter((season): season is SeasonSummary => Boolean(season));
+
+        for (const summary of targets) {
+          if (!summary.episodeCount || summary.episodeCount <= 0) continue;
+          const attemptKey = `${item.media.id}:${summary.seasonNumber}`;
+          if (Date.now() - (scheduleBackfillAttempts.get(attemptKey) ?? 0) < SCHEDULE_BACKFILL_TTL_MS) continue;
+
+          const cached = await watchStateRepository.getCachedSeason(item.identity, summary.seasonNumber);
+          const cachedEpisodes = cached?.episodes ?? [];
+          // Only refetch when dates can actually improve: incomplete seasons,
+          // or dated rows that stop before undated rows. Synthetic lists have
+          // no anchor at all and must not cause a request loop.
+          const lastDated = cachedEpisodes.reduce((latest, episode) => episode.airDate ? Math.max(latest, episode.episodeNumber) : latest, 0);
+          const missingDates = lastDated > 0 && cachedEpisodes.some((episode) => !episode.airDate && episode.episodeNumber > lastDated);
+          if (cachedEpisodes.length >= summary.episodeCount && !missingDates) continue;
+
+          scheduleBackfillAttempts.set(attemptKey, Date.now());
+          jobs.push({ item, summary });
+          if (jobs.length >= 12) break;
+        }
+      }
+
+      // Two seasons at a time keeps SQLite and the providers comfortable.
+      for (let index = 0; index < jobs.length; index += 2) {
+        if (cancelled) return;
+        await Promise.all(jobs.slice(index, index + 2).map(async ({ item, summary }) => {
+          try {
+            const fetched = await fetchCatalogSeason(item.identity, summary.seasonNumber, summary);
+            if (cancelled || !fetched.episodes.length) return;
+            await watchStateRepository.storeSeason(
+              item.media,
+              fetched.seasonNumber,
+              fetched.name,
+              fetched.episodes.length,
+              fetched.overview,
+              fetched.airDate,
+              fetched.posterUrl,
+              fetched.episodes,
+            );
+            changed = true;
+          } catch {
+            // Offline or a provider gap: keep whatever schedule is cached.
+          }
+        }));
+      }
+
+      if (!cancelled && changed) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: watchKeys.progress }),
+          queryClient.invalidateQueries({ queryKey: watchKeys.continue }),
+        ]);
+      }
+    })().finally(() => { running.current = false; });
+
+    return () => { cancelled = true; };
+  }, [enabled, progressQuery.data, queryClient]);
 }
 
 export function useTrackedMedia(identity: MediaIdentity | undefined) {
@@ -138,7 +246,7 @@ export function useWatchlistMutation(media: CatalogMedia, currentlySaved: boolea
 export function useSaveToWatchlist(media: CatalogMedia) {
   const invalidate = useInvalidateWatchState();
   return useMutation({
-    mutationFn: (priority: WatchPriority) => watchStateRepository.saveToWatchlist(media, priority),
+    mutationFn: (priority: WatchPriority | null) => watchStateRepository.saveToWatchlist(media, priority),
     onSuccess: () => invalidate(true),
   });
 }
@@ -278,20 +386,75 @@ export function useAdvanceEpisode() {
   return useMutation({
     mutationFn: async (progress: SeriesProgress) => {
       const { media, nextEpisode } = progress;
-      const seasonNumber = progress.nextSeasonNumber ?? nextEpisode?.seasonNumber;
-      if (media.mediaType === 'anime' && (!nextEpisode || seasonNumber === undefined)) {
-        const identity = { provider: media.provider, mediaType: media.mediaType, providerId: media.providerId };
-        const current = await watchStateRepository.getAnimeWatchedCount(identity);
-        const total = progress.totalEpisodeCount ?? media.numberOfEpisodes ?? 0;
-        const next = total > 0 ? Math.min(current + 1, total) : current + 1;
-        await watchStateRepository.setAnimeWatchedCount(media, next);
+      const identity: MediaIdentity = { provider: media.provider, mediaType: media.mediaType, providerId: media.providerId };
+      const isAnime = media.mediaType === 'anime';
+      const total = progress.totalEpisodeCount ?? (media.numberOfEpisodes && media.numberOfEpisodes > 0 ? media.numberOfEpisodes : undefined);
+      // Manual anime counters are the only source of truth when no episode
+      // rows exist. If the counter is ahead of the cached episode rows, keep
+      // using it instead of re-marking episode 1.
+      const cachedWatched = Math.max(0, progress.cachedEpisodeCount - (progress.nextEpisodes?.length ?? 0));
+      const manualAnime = isAnime && (progress.cachedEpisodeCount === 0 || progress.watchedEpisodeCount > cachedWatched);
+
+      const advanceAnimeCount = async () => {
+        const stored = await watchStateRepository.getAnimeWatchedCount(identity);
+        const current = Math.max(stored, progress.watchedEpisodeCount);
+        if (total && current >= total) throw new AppError('catalog', 'Every episode is already watched.');
+        await watchStateRepository.setAnimeWatchedCount(media, total ? Math.min(current + 1, total) : current + 1);
+      };
+
+      if (manualAnime) {
+        await advanceAnimeCount();
         return;
       }
-      if (!nextEpisode || seasonNumber === undefined) {
-        throw new Error('The next episode is not available yet.');
+
+      const seasonNumber = progress.nextSeasonNumber ?? nextEpisode?.seasonNumber;
+      if (seasonNumber === undefined) {
+        if (isAnime) { await advanceAnimeCount(); return; }
+        throw new AppError('catalog', 'The next episode is not available yet.');
       }
-      const season = await catalogRepository.getSeason(media, seasonNumber);
-      await watchStateRepository.setEpisodeWatched(media, season, nextEpisode, true);
+
+      const summary = media.seasonSummaries?.find((season) => season.seasonNumber === seasonNumber);
+      let season = await watchStateRepository.getCachedSeason(identity, seasonNumber);
+      const cachedHasTarget = nextEpisode
+        ? Boolean(season?.episodes.some((episode) => episode.providerId === nextEpisode.providerId || episode.episodeNumber === nextEpisode.episodeNumber))
+        : false;
+      // No network for the common case (the next episode is already cached).
+      // Without a next episode we must refresh: the cached season may only
+      // hold the episodes that had dropped when it was stored.
+      if (!season || !nextEpisode || !cachedHasTarget) {
+        try {
+          const fetched = await fetchCatalogSeason(identity, seasonNumber, summary);
+          await watchStateRepository.storeSeason(media, fetched.seasonNumber, fetched.name, fetched.episodes.length, fetched.overview, fetched.airDate, fetched.posterUrl, fetched.episodes);
+          season = (await watchStateRepository.getCachedSeason(identity, seasonNumber)) ?? fetched;
+        } catch (error) {
+          // Anime without any usable episode list still advances by count.
+          if (isAnime) { await advanceAnimeCount(); return; }
+          throw error;
+        }
+      }
+
+      if (!season) throw new AppError('catalog', 'The next episode is not available yet.');
+      let target = nextEpisode;
+      if (target) {
+        target = season.episodes.find((episode) => episode.providerId === target!.providerId)
+          ?? season.episodes.find((episode) => episode.episodeNumber === target!.episodeNumber)
+          ?? target;
+      } else {
+        // The first episode of the new season that has actually aired.
+        target = [...season.episodes].sort((a, b) => a.episodeNumber - b.episodeNumber).find((episode) => hasAired(episode.airDate));
+      }
+
+      if (!target) {
+        if (isAnime) { await advanceAnimeCount(); return; }
+        throw new AppError('catalog', 'No episode of this season has aired yet.');
+      }
+      if (!hasAired(target.airDate)) {
+        const date = formatReleaseDate(target.airDate);
+        throw new AppError('catalog', date
+          ? `Episode ${target.episodeNumber} airs ${date}.`
+          : `Episode ${target.episodeNumber} hasn't aired yet.`);
+      }
+      await watchStateRepository.setEpisodeWatched(media, season, target, true);
     },
     onSuccess: () => invalidate(true),
   });
@@ -307,7 +470,11 @@ export function useToggleSeason(media: CatalogMedia, seasonNumber: number) {
       const key = watchKeys.episodes(media, season.seasonNumber);
       await queryClient.cancelQueries({ queryKey: key });
       const previous = queryClient.getQueryData<string[]>(key) ?? [];
-      queryClient.setQueryData<string[]>(key, watched ? season.episodes.map((episode) => episode.providerId) : []);
+      // Repository marks only aired episodes; the optimistic checkmarks must
+      // match so weekly shows never flash future episodes as watched.
+      queryClient.setQueryData<string[]>(key, watched
+        ? season.episodes.filter((episode) => hasAired(episode.airDate)).map((episode) => episode.providerId)
+        : []);
       return { previous, key };
     },
     onError: (_error, _variables, context) => {

@@ -1,8 +1,9 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { AppError } from '@/domain/errors/AppError';
 import type { CatalogMedia, CatalogSeason, MediaEpisode, MediaIdentity } from '@/domain/models/media';
-import type { ContinueWatchingItem, CustomListDetail, CustomListSummary, FavoriteEntry, HistoryItem, InterestedEntry, LibraryStatus, ListFolder, PendingWatchStateChange, SeriesProgress, TrashItem, UpcomingEpisode, UserRating, WatchPriority, WatchStateRepository, WatchStateSyncRepository, WatchlistEntry, WatchedLibraryItem } from '@/domain/models/watchState';
+import type { ContinueWatchingItem, CustomListDetail, CustomListSummary, FavoriteEntry, HistoryItem, InterestedEntry, LibraryStatus, ListFolder, PendingWatchStateChange, SeriesProgress, TrashItem, UpcomingEpisode, UserRating, WatchPriority, WatchStateRepository, WatchStateSyncRepository, WatchlistEntry, WatchedEpisodeSnapshot, WatchedLibraryItem } from '@/domain/models/watchState';
 import { isWatchPriority } from '@/features/watchState/priority';
+import { hasAired } from '@/features/catalog/upcoming';
 import { getDatabase } from '@/data/local/database/database';
 import { mediaId } from '@/features/catalog/mediaIdentity';
 
@@ -24,6 +25,9 @@ interface EpisodeRow {
 interface SeriesRow extends MediaRow {
   watched_count: number; cached_count: number; watched_at?: string | null; added_at?: string | null;
   completed?: number | null; completed_at?: string | null;
+  /** Manual AniList counter; merged into progress because anime has no episode rows. */
+  anime_watched_count?: number | null;
+  anime_watched_at?: string | null;
 }
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -98,19 +102,128 @@ function syncSnapshot(media: CatalogMedia): CatalogMedia {
   };
 }
 
-async function enqueueSyncChange(db: SQLiteDatabase, change: Omit<PendingWatchStateChange, 'id' | 'retryCount'>): Promise<void> {
-  await db.runAsync(
-    `INSERT INTO sync_queue (entity_type, entity_key, provider, media_type, provider_id, season_number, episode_number, is_deleted, updated_at, payload, media_json, rewatch_count, position)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(entity_type, entity_key) DO UPDATE SET provider=excluded.provider, media_type=excluded.media_type, provider_id=excluded.provider_id,
-      season_number=excluded.season_number, episode_number=excluded.episode_number, is_deleted=excluded.is_deleted, updated_at=excluded.updated_at, payload=excluded.payload, media_json=excluded.media_json, rewatch_count=excluded.rewatch_count, position=excluded.position, last_error=NULL`,
+const SYNC_QUEUE_COLUMNS = '(entity_type, entity_key, provider, media_type, provider_id, season_number, episode_number, is_deleted, updated_at, payload, media_json, rewatch_count, position)';
+const SYNC_QUEUE_UPDATE = `ON CONFLICT(entity_type, entity_key) DO UPDATE SET provider=excluded.provider, media_type=excluded.media_type, provider_id=excluded.provider_id,
+  season_number=excluded.season_number, episode_number=excluded.episode_number, is_deleted=excluded.is_deleted, updated_at=excluded.updated_at, payload=excluded.payload, media_json=excluded.media_json, rewatch_count=excluded.rewatch_count, position=excluded.position, last_error=NULL`;
+
+function syncChangeParams(change: Omit<PendingWatchStateChange, 'id' | 'retryCount'>): (string | number | null)[] {
+  return [
     change.entityType, change.entityKey, change.provider, change.mediaType, change.providerId,
     optional(change.seasonNumber), optional(change.episodeNumber), change.deleted ? 1 : 0, change.updatedAt,
     JSON.stringify({ media: syncSnapshot(change.media), watchedAt: change.watchedAt, episode: change.episode, completed: change.completed, priority: change.priority }),
     JSON.stringify(syncSnapshot(change.media)),
     change.rewatchCount ?? 0,
     change.entityType === 'watchlist' ? change.position ?? 0 : 0,
+  ];
+}
+
+async function enqueueSyncChange(db: SQLiteDatabase, change: Omit<PendingWatchStateChange, 'id' | 'retryCount'>): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO sync_queue ${SYNC_QUEUE_COLUMNS} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${SYNC_QUEUE_UPDATE}`,
+    ...syncChangeParams(change),
   );
+}
+
+/**
+ * Bulk writes are what keep "Mark as Watched" instant on a 10-season show.
+ * SQLite bridges every statement, so one multi-row upsert per 40 episodes
+ * replaces hundreds of round trips without changing the queue's shape.
+ */
+async function enqueueSyncChanges(db: SQLiteDatabase, changes: Omit<PendingWatchStateChange, 'id' | 'retryCount'>[]): Promise<void> {
+  const chunkSize = 40;
+  for (let offset = 0; offset < changes.length; offset += chunkSize) {
+    const chunk = changes.slice(offset, offset + chunkSize);
+    if (!chunk.length) continue;
+    const values = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const params = chunk.flatMap((change) => syncChangeParams(change));
+    await db.runAsync(`INSERT INTO sync_queue ${SYNC_QUEUE_COLUMNS} VALUES ${values} ${SYNC_QUEUE_UPDATE}`, ...params);
+  }
+}
+
+/**
+ * A restore replaces local data while the old sync queue may still describe
+ * the pre-restore library. Rebuild the queue from the restored rows so the
+ * cloud converges to the backup instead of resurrecting stale local state.
+ */
+async function rebuildSyncQueueAfterRestore(db: SQLiteDatabase, now: string): Promise<void> {
+  await db.runAsync('DELETE FROM sync_queue');
+  const changes: Omit<PendingWatchStateChange, 'id' | 'retryCount'>[] = [];
+
+  const watchlist = await db.getAllAsync<MediaRow & { added_at: string; position: number | null; priority: string | null }>('SELECT m.*, w.added_at, w.position, w.priority FROM watchlist_entries w JOIN tracked_media m ON m.id = w.media_id');
+  for (const row of watchlist) changes.push({ entityType: 'watchlist', entityKey: row.id, provider: row.provider, mediaType: row.media_type, providerId: row.provider_id, deleted: false, updatedAt: now, watchedAt: row.added_at, media: mapMedia(row), position: row.position ?? 0, priority: isWatchPriority(row.priority) ? row.priority : undefined });
+
+  const movies = await db.getAllAsync<MediaRow & { watched_at: string }>('SELECT m.*, w.watched_at FROM movie_watches w JOIN tracked_media m ON m.id = w.media_id');
+  for (const row of movies) changes.push({ entityType: 'movie', entityKey: row.id, provider: row.provider, mediaType: row.media_type, providerId: row.provider_id, deleted: false, updatedAt: now, watchedAt: row.watched_at, media: mapMedia(row) });
+
+  const favorites = await db.getAllAsync<MediaRow & { favorited_at: string }>('SELECT m.*, f.favorited_at FROM favorite_entries f JOIN tracked_media m ON m.id = f.media_id');
+  for (const row of favorites) changes.push({ entityType: 'favorite', entityKey: row.id, provider: row.provider, mediaType: row.media_type, providerId: row.provider_id, deleted: false, updatedAt: now, watchedAt: row.favorited_at, media: mapMedia(row) });
+
+  const interested = await db.getAllAsync<MediaRow & { marked_at: string }>('SELECT m.*, i.marked_at FROM interested_entries i JOIN tracked_media m ON m.id = i.media_id');
+  for (const row of interested) changes.push({ entityType: 'interested', entityKey: row.id, provider: row.provider, mediaType: row.media_type, providerId: row.provider_id, deleted: false, updatedAt: now, watchedAt: row.marked_at, media: mapMedia(row) });
+
+  const ratings = await db.getAllAsync<MediaRow & { rating_value: number | null; thumbs: number; rated_at: string }>('SELECT m.*, r.rating AS rating_value, r.thumbs, r.updated_at AS rated_at FROM user_ratings r JOIN tracked_media m ON m.id = r.media_id');
+  for (const row of ratings) changes.push({ entityType: 'rating', entityKey: row.id, provider: row.provider, mediaType: row.media_type, providerId: row.provider_id, deleted: false, updatedAt: now, media: mapMedia(row), rating: row.rating_value, thumbs: row.thumbs === 1 ? 1 : row.thumbs === -1 ? -1 : 0 });
+
+  const series = await db.getAllAsync<MediaRow & { completed?: number | null }>('SELECT m.*, s.completed FROM tracked_series s JOIN tracked_media m ON m.id = s.media_id');
+  for (const row of series) changes.push({ entityType: 'series', entityKey: row.id, provider: row.provider, mediaType: row.media_type, providerId: row.provider_id, deleted: false, updatedAt: now, media: mapMedia(row), completed: row.completed === 1 });
+
+  const episodes = await db.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE watched_at IS NOT NULL');
+  const savedMedia = new Map((await db.getAllAsync<MediaRow>('SELECT * FROM tracked_media')).map((row) => [row.id, row]));
+  for (const row of episodes) {
+    const parent = savedMedia.get(row.series_id);
+    if (!parent) continue;
+    changes.push(episodeSyncChange(mapMedia(parent), mapEpisode(row), { deleted: false, updatedAt: now, watchedAt: row.watched_at ?? undefined, rewatchCount: row.rewatch_count ?? 0 }));
+  }
+
+  await enqueueSyncChanges(db, changes);
+}
+
+function episodeSyncChange(
+  media: CatalogMedia,
+  episode: MediaEpisode,
+  input: { deleted: boolean; updatedAt: string; watchedAt?: string; rewatchCount?: number },
+): Omit<PendingWatchStateChange, 'id' | 'retryCount'> {
+  return {
+    entityType: 'episode',
+    entityKey: `${media.id}:${episode.seasonNumber}:${episode.episodeNumber}`,
+    provider: media.provider,
+    mediaType: media.mediaType,
+    providerId: episode.providerId,
+    seasonNumber: episode.seasonNumber,
+    episodeNumber: episode.episodeNumber,
+    deleted: input.deleted,
+    updatedAt: input.updatedAt,
+    media,
+    watchedAt: input.watchedAt,
+    episode,
+    rewatchCount: input.rewatchCount ?? 0,
+  };
+}
+
+/** Marks only the rows that are not watched yet; rewatches are counted once. */
+async function markEpisodeRowsWatched(db: SQLiteDatabase, ids: string[], now: string): Promise<void> {
+  const chunkSize = 400;
+  for (let offset = 0; offset < ids.length; offset += chunkSize) {
+    const chunk = ids.slice(offset, offset + chunkSize);
+    if (!chunk.length) continue;
+    const placeholders = chunk.map(() => '?').join(', ');
+    await db.runAsync(
+      `UPDATE tracked_episodes SET watched_at = COALESCE(watched_at, ?),
+        rewatch_count = rewatch_count + CASE WHEN watched_at IS NOT NULL THEN 1 ELSE 0 END,
+        updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
+      now, ...chunk,
+    );
+  }
+}
+
+async function clearEpisodeRowsWatched(db: SQLiteDatabase, ids: string[]): Promise<void> {
+  const chunkSize = 400;
+  for (let offset = 0; offset < ids.length; offset += chunkSize) {
+    const chunk = ids.slice(offset, offset + chunkSize);
+    if (!chunk.length) continue;
+    const placeholders = chunk.map(() => '?').join(', ');
+    await db.runAsync(`UPDATE tracked_episodes SET watched_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`, ...chunk);
+  }
 }
 
 async function saveMedia(db: SQLiteDatabase, media: CatalogMedia): Promise<void> {
@@ -158,6 +271,27 @@ async function saveEpisode(db: SQLiteDatabase, series: CatalogMedia, episode: Me
   );
 }
 
+async function saveEpisodes(db: SQLiteDatabase, media: CatalogMedia, episodes: MediaEpisode[]): Promise<void> {
+  const chunkSize = 60;
+  for (let offset = 0; offset < episodes.length; offset += chunkSize) {
+    const chunk = episodes.slice(offset, offset + chunkSize);
+    if (!chunk.length) continue;
+    const values = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const params = chunk.flatMap((episode) => [
+      episodeRowId(episode.provider, episode.providerId), episode.provider, episode.providerId, media.id,
+      episode.seasonNumber, episode.episodeNumber, episode.title,
+      optional(episode.overview), optional(episode.airDate), optional(episode.stillUrl), optional(episode.runtimeMinutes),
+    ]);
+    await db.runAsync(
+      `INSERT INTO tracked_episodes (id, provider, provider_id, series_id, season_number, episode_number, title, overview, air_date, still_url, runtime_minutes)
+       VALUES ${values}
+       ON CONFLICT(id) DO UPDATE SET series_id=excluded.series_id, season_number=excluded.season_number, episode_number=excluded.episode_number,
+        title=excluded.title, overview=excluded.overview, air_date=excluded.air_date, still_url=excluded.still_url, runtime_minutes=excluded.runtime_minutes, updated_at=CURRENT_TIMESTAMP`,
+      ...params,
+    );
+  }
+}
+
 async function saveSeason(db: SQLiteDatabase, media: CatalogMedia, season: { seasonNumber: number; name: string; episodeCount?: number; overview?: string; airDate?: string; posterUrl?: string; episodes: MediaEpisode[] }): Promise<void> {
   await db.runAsync(
     `INSERT INTO tracked_seasons (media_id, season_number, name, episode_count, overview, air_date, poster_url)
@@ -166,28 +300,37 @@ async function saveSeason(db: SQLiteDatabase, media: CatalogMedia, season: { sea
       air_date=excluded.air_date, poster_url=excluded.poster_url, updated_at=CURRENT_TIMESTAMP`,
     media.id, season.seasonNumber, season.name, optional(season.episodeCount), optional(season.overview), optional(season.airDate), optional(season.posterUrl),
   );
-  for (const episode of season.episodes) await saveEpisode(db, media, episode);
+  await saveEpisodes(db, media, season.episodes);
 }
 
 function toProgress(row: SeriesRow, episodes: EpisodeRow[]): SeriesProgress {
   const media = mapMedia(row);
   const ordered = episodes.filter((episode) => !episode.watched_at).sort((a, b) => a.season_number - b.season_number || a.episode_number - b.episode_number);
-  const watchedEpisodeCount = row.watched_count;
+  const nextEpisodes = ordered.map(mapEpisode);
+  // Anime with no episode rows keeps its progress in `anime_progress`. Take
+  // the larger count so a title that later gains real episodes keeps whatever
+  // the user already recorded by hand.
+  const watchedEpisodeCount = Math.max(row.watched_count, row.anime_watched_count ?? 0);
   const cachedEpisodeCount = row.cached_count;
   const summaryCounts = media.seasonSummaries?.map((season) => season.episodeCount);
   const totalEpisodeCount = media.numberOfEpisodes && media.numberOfEpisodes > 0 ? media.numberOfEpisodes
     : summaryCounts?.length && summaryCounts.every((count): count is number => typeof count === 'number') ? summaryCounts.reduce((sum, count) => sum + count, 0) : undefined;
   const denominator = totalEpisodeCount ?? cachedEpisodeCount;
-  const nextEpisode = ordered[0] ? mapEpisode(ordered[0]) : undefined;
-  const cachedSeasons = new Set(episodes.map((episode) => episode.season_number));
+  const nextEpisode = nextEpisodes[0];
+  // A season that is still missing cached episodes is the next place to look —
+  // including the current season when only its first few episodes have dropped.
   const nextSeasonNumber = !nextEpisode && totalEpisodeCount !== undefined && watchedEpisodeCount < totalEpisodeCount
-    ? media.seasonSummaries?.find((season) => !cachedSeasons.has(season.seasonNumber))?.seasonNumber
+    ? media.seasonSummaries?.find((season) => {
+        const cachedInSeason = episodes.filter((episode) => episode.season_number === season.seasonNumber).length;
+        if (cachedInSeason === 0) return true;
+        return typeof season.episodeCount === 'number' ? cachedInSeason < season.episodeCount : false;
+      })?.seasonNumber
     : undefined;
   return {
     identity: { provider: media.provider, mediaType: media.mediaType, providerId: media.providerId }, media,
     watchedEpisodeCount, cachedEpisodeCount, totalEpisodeCount,
     progress: denominator > 0 ? Math.min(1, watchedEpisodeCount / denominator) : 0,
-    isComplete: row.completed === 1 || Boolean(totalEpisodeCount && watchedEpisodeCount >= totalEpisodeCount), lastWatchedAt: row.watched_at ?? row.completed_at ?? undefined, nextEpisode, nextSeasonNumber,
+    isComplete: row.completed === 1 || Boolean(totalEpisodeCount && watchedEpisodeCount >= totalEpisodeCount), lastWatchedAt: row.watched_at ?? row.anime_watched_at ?? row.completed_at ?? undefined, nextEpisode, nextEpisodes: nextEpisodes.slice(0, 40), nextSeasonNumber,
   };
 }
 
@@ -265,10 +408,7 @@ async function clearWatchedForWatchlist(db: SQLiteDatabase, media: CatalogMedia,
   const watchedEpisodes = await db.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ? AND watched_at IS NOT NULL', media.id);
   if (watchedEpisodes.length) {
     await db.runAsync('UPDATE tracked_episodes SET watched_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE series_id = ? AND watched_at IS NOT NULL', media.id);
-    for (const row of watchedEpisodes) {
-      const episode = mapEpisode(row);
-      await enqueueSyncChange(db, { entityType: 'episode', entityKey: `${media.id}:${episode.seasonNumber}:${episode.episodeNumber}`, provider: media.provider, mediaType: media.mediaType, providerId: episode.providerId, seasonNumber: episode.seasonNumber, episodeNumber: episode.episodeNumber, deleted: true, updatedAt: now, media, episode, rewatchCount: row.rewatch_count ?? 0 });
-    }
+    await enqueueSyncChanges(db, watchedEpisodes.map((row) => episodeSyncChange(media, mapEpisode(row), { deleted: true, updatedAt: now, rewatchCount: row.rewatch_count ?? 0 })));
   }
   const tracked = await db.getFirstAsync('SELECT 1 AS found FROM tracked_series WHERE media_id = ?', media.id);
   if (tracked) {
@@ -298,7 +438,13 @@ async function syncSeriesCompletion(db: SQLiteDatabase, media: CatalogMedia, now
   const counts = await db.getFirstAsync<{ watched: number }>('SELECT COUNT(*) AS watched FROM tracked_episodes WHERE series_id = ? AND watched_at IS NOT NULL', media.id);
   const watched = counts?.watched ?? 0;
   const total = knownEpisodeTotal(media);
-  if (!total || watched <= 0 || watched < total) return;
+  if (!total || watched <= 0) return;
+  if (watched < total) {
+    // A weekly title that still has future episodes must not stay completed
+    // just because an older build had marked those future rows.
+    await clearSeriesCompletion(db, media, now);
+    return;
+  }
   const tracked = await db.getFirstAsync<{ completed: number | null }>('SELECT completed FROM tracked_series WHERE media_id = ?', media.id);
   if (tracked?.completed !== 1) {
     await db.runAsync('UPDATE tracked_series SET completed = 1, completed_at = ?, updated_at = ? WHERE media_id = ?', now, now, media.id);
@@ -568,6 +714,7 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
 
   async setEpisodeWatched(media: CatalogMedia, season: CatalogSeason, episode: MediaEpisode, watched: boolean): Promise<void> {
     ensureTrackableSeries(media);
+    if (watched && !hasAired(episode.airDate)) throw new AppError('catalog', 'This episode hasn’t aired yet.');
     await this.run("Couldn't update this episode. Try again.", async (db) => {
       await db.withExclusiveTransactionAsync(async (tx) => {
         await ensureSeries(tx, media);
@@ -594,23 +741,53 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
   async setSeasonWatched(media: CatalogMedia, season: CatalogSeason, watched: boolean): Promise<void> {
     ensureTrackableSeries(media);
     if (!season.episodes.length) throw new AppError('catalog', "Episode information isn't available for this season.");
+    // Weekly seasons mix episode data that has aired with future rows the
+    // provider already knows about. Only the former can be watched.
+    const aired = season.episodes.filter((episode) => hasAired(episode.airDate));
+    if (watched && !aired.length) throw new AppError('catalog', 'No episodes of this season have aired yet.');
     await this.run("Couldn't update this season. Try again.", async (db) => {
       await db.withExclusiveTransactionAsync(async (tx) => {
         await ensureSeries(tx, media);
         const summary = media.seasonSummaries?.find((item) => item.seasonNumber === season.seasonNumber);
         await saveSeason(tx, media, { ...season, episodeCount: summary?.episodeCount });
         const now = new Date().toISOString();
+        const before = await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ? AND season_number = ?', media.id, season.seasonNumber);
+        const previouslyWatched = new Set(before.filter((row) => row.watched_at).map((row) => row.id));
         if (watched) {
-          await tx.runAsync('UPDATE tracked_episodes SET watched_at = ?, rewatch_count = rewatch_count + CASE WHEN watched_at IS NOT NULL THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP WHERE series_id = ? AND season_number = ?', now, media.id, season.seasonNumber);
+          // Repair rows marked by older builds: an episode with a future air
+          // date can never have been watched yet.
+          const repairedIds = before.filter((row) => row.watched_at && !hasAired(row.air_date ?? undefined)).map((row) => row.id);
+          await clearEpisodeRowsWatched(tx, repairedIds);
+          const newlyWatchedIds = aired
+            .map((episode) => episodeRowId(episode.provider, episode.providerId))
+            .filter((id) => !previouslyWatched.has(id));
+          await markEpisodeRowsWatched(tx, newlyWatchedIds, now);
         } else {
           await tx.runAsync('UPDATE tracked_episodes SET watched_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE series_id = ? AND season_number = ?', media.id, season.seasonNumber);
           await clearSeriesCompletion(tx, media, now);
         }
-        const counts = new Map((await tx.getAllAsync<{ provider_id: string; rewatch_count: number }>('SELECT provider_id, rewatch_count FROM tracked_episodes WHERE series_id = ? AND season_number = ?', media.id, season.seasonNumber)).map((row) => [row.provider_id, row.rewatch_count]));
-        for (const episode of season.episodes) await enqueueSyncChange(tx, { entityType: 'episode', entityKey: `${media.id}:${episode.seasonNumber}:${episode.episodeNumber}`, provider: media.provider, mediaType: media.mediaType, providerId: episode.providerId, seasonNumber: episode.seasonNumber, episodeNumber: episode.episodeNumber, deleted: !watched, updatedAt: new Date().toISOString(), media, watchedAt: watched ? now ?? undefined : undefined, episode, rewatchCount: counts.get(episode.providerId) ?? 0 });
+        const after = await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ? AND season_number = ?', media.id, season.seasonNumber);
+        const changes: Omit<PendingWatchStateChange, 'id' | 'retryCount'>[] = [];
+        for (const row of after) {
+          const isAired = hasAired(row.air_date ?? undefined);
+          const wasWatched = previouslyWatched.has(row.id);
+          // Only rows whose watched state actually changed need a network
+          // change; unchanged rows were already synced (or are still queued).
+          if (watched) {
+            if (!isAired) {
+              if (wasWatched) changes.push(episodeSyncChange(media, mapEpisode(row), { deleted: true, updatedAt: now, rewatchCount: row.rewatch_count ?? 0 }));
+              continue;
+            }
+            if (wasWatched) continue;
+            changes.push(episodeSyncChange(media, mapEpisode(row), { deleted: false, updatedAt: now, watchedAt: row.watched_at ?? now, rewatchCount: row.rewatch_count ?? 0 }));
+          } else if (wasWatched) {
+            changes.push(episodeSyncChange(media, mapEpisode(row), { deleted: true, updatedAt: now, rewatchCount: row.rewatch_count ?? 0 }));
+          }
+        }
+        await enqueueSyncChanges(tx, changes);
         await tx.runAsync('UPDATE tracked_series SET updated_at = CURRENT_TIMESTAMP WHERE media_id = ?', media.id);
         // Finishing the last episode completes the series and clears the watchlist row.
-        if (watched) await syncSeriesCompletion(tx, media, new Date().toISOString());
+        if (watched) await syncSeriesCompletion(tx, media, now);
       });
     });
   }
@@ -621,24 +798,60 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
     await this.run("Couldn't update this series. Try again.", async (db) => {
       await db.withExclusiveTransactionAsync(async (tx) => {
         if (watched || seasons.length) await ensureSeries(tx, media);
+        // Cache the provider's full season chain (including announced future
+        // episodes) but only write a watch for episodes that have aired.
         for (const season of seasons) await saveSeason(tx, media, season);
-        const now = watched ? new Date().toISOString() : null;
+        const now = new Date().toISOString();
+        const before = await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ?', media.id);
+        const previouslyWatched = new Set(before.filter((row) => row.watched_at).map((row) => row.id));
         if (watched) {
-          await tx.runAsync('UPDATE tracked_episodes SET watched_at = ?, rewatch_count = rewatch_count + CASE WHEN watched_at IS NOT NULL THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP WHERE series_id = ?', now, media.id);
+          // Self-repair: older builds marked whole seasons, including future
+          // rows whose release date has not arrived yet.
+          const repairedIds = before.filter((row) => row.watched_at && !hasAired(row.air_date ?? undefined)).map((row) => row.id);
+          await clearEpisodeRowsWatched(tx, repairedIds);
+          const newlyWatchedIds = seasons
+            .flatMap((season) => season.episodes)
+            .filter((episode) => hasAired(episode.airDate))
+            .map((episode) => episodeRowId(episode.provider, episode.providerId))
+            .filter((id) => !previouslyWatched.has(id));
+          await markEpisodeRowsWatched(tx, newlyWatchedIds, now);
         } else {
           await tx.runAsync('UPDATE tracked_episodes SET watched_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE series_id = ?', media.id);
+          // Manual anime counts are a second progress store; clearing a series
+          // must reset them too, otherwise "Mark as Watched" can bounce back to
+          // Watching on the next read.
+          await tx.runAsync('DELETE FROM anime_progress WHERE media_id = ?', media.id);
         }
-        const episodes = seasons.flatMap((season) => season.episodes);
-        const storedEpisodes: MediaEpisode[] = episodes.length ? episodes : (await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ?', media.id)).map(mapEpisode);
-        const counts = new Map((await tx.getAllAsync<{ provider_id: string; rewatch_count: number }>('SELECT provider_id, rewatch_count FROM tracked_episodes WHERE series_id = ?', media.id)).map((row) => [row.provider_id, row.rewatch_count]));
-        for (const episode of storedEpisodes) {
-          await enqueueSyncChange(tx, { entityType: 'episode', entityKey: `${media.id}:${episode.seasonNumber}:${episode.episodeNumber}`, provider: media.provider, mediaType: media.mediaType, providerId: episode.providerId, seasonNumber: episode.seasonNumber, episodeNumber: episode.episodeNumber, deleted: !watched, updatedAt: new Date().toISOString(), media, watchedAt: watched ? now ?? undefined : undefined, episode, rewatchCount: counts.get(episode.providerId) ?? 0 });
+        const after = await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ?', media.id);
+        const changes: Omit<PendingWatchStateChange, 'id' | 'retryCount'>[] = [];
+        for (const row of after) {
+          const isAired = hasAired(row.air_date ?? undefined);
+          const wasWatched = previouslyWatched.has(row.id);
+          // Only rows whose watched state actually changed need a network
+          // change; unchanged rows were already synced (or are still queued).
+          if (watched) {
+            if (!isAired) {
+              if (wasWatched) changes.push(episodeSyncChange(media, mapEpisode(row), { deleted: true, updatedAt: now, rewatchCount: row.rewatch_count ?? 0 }));
+              continue;
+            }
+            if (wasWatched) continue;
+            changes.push(episodeSyncChange(media, mapEpisode(row), { deleted: false, updatedAt: now, watchedAt: row.watched_at ?? now, rewatchCount: row.rewatch_count ?? 0 }));
+          } else if (wasWatched) {
+            changes.push(episodeSyncChange(media, mapEpisode(row), { deleted: true, updatedAt: now, rewatchCount: row.rewatch_count ?? 0 }));
+          }
         }
-        const flagAt = new Date().toISOString();
-        await tx.runAsync('UPDATE tracked_series SET updated_at = ?, completed = ?, completed_at = ? WHERE media_id = ?', flagAt, watched ? 1 : 0, watched ? now : null, media.id);
-        await enqueueSyncChange(tx, { entityType: 'series', entityKey: media.id, provider: media.provider, mediaType: media.mediaType, providerId: media.providerId, deleted: false, updatedAt: flagAt, media, watchedAt: watched ? now ?? undefined : undefined, completed: watched });
-        // Watched wins over the watchlist: never both at once.
-        if (watched) await dropWatchlistEntry(tx, media, flagAt);
+        await enqueueSyncChanges(tx, changes);
+        // Completion follows the same rule as progress reads: every known
+        // episode is watched. A weekly show with future episodes stays in
+        // Watching even when all currently aired episodes are done.
+        const watchedCount = after.filter((row) => row.watched_at).length;
+        const total = knownEpisodeTotal(media);
+        const completed = Boolean(watched && total && watchedCount >= total);
+        await tx.runAsync('UPDATE tracked_series SET updated_at = ?, completed = ?, completed_at = ? WHERE media_id = ?', now, completed ? 1 : 0, completed ? now : null, media.id);
+        await enqueueSyncChange(tx, { entityType: 'series', entityKey: media.id, provider: media.provider, mediaType: media.mediaType, providerId: media.providerId, deleted: false, updatedAt: now, media, watchedAt: completed ? now : undefined, completed });
+        // Finished wins over the watchlist: never both at once. A partially
+        // watched weekly show legitimately remains on the watchlist too.
+        if (completed) await dropWatchlistEntry(tx, media, now);
       });
     });
   }
@@ -663,10 +876,22 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
     await this.run("Couldn't update episode progress. Try again.", async (db) => {
       await db.withExclusiveTransactionAsync(async (tx) => {
         await saveMedia(tx, media);
+        const now = new Date().toISOString();
+        const total = media.numberOfEpisodes && media.numberOfEpisodes > 0 ? media.numberOfEpisodes : 0;
+        const complete = total > 0 && clamped >= total;
+        // Keep the series row in step with the manual counter: reaching the
+        // total finishes the show, so it leaves Watching and joins Completed.
+        await tx.runAsync(
+          `INSERT INTO tracked_series (media_id, tracking_started_at, updated_at, completed, completed_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(media_id) DO UPDATE SET updated_at=excluded.updated_at, completed=excluded.completed, completed_at=excluded.completed_at`,
+          media.id, now, now, complete ? 1 : 0, complete ? now : null,
+        );
         await tx.runAsync(
           'INSERT INTO anime_progress (media_id, watched_count, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(media_id) DO UPDATE SET watched_count=excluded.watched_count, updated_at=CURRENT_TIMESTAMP',
           media.id, clamped,
         );
+        if (complete) await dropWatchlistEntry(tx, media, now);
       });
     });
   }
@@ -686,6 +911,97 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
     return this.run("Couldn't load episode status.", async (db) => {
       const rows = await db.getAllAsync<{ provider_id: string }>('SELECT provider_id FROM tracked_episodes WHERE series_id = ? AND season_number = ? AND watched_at IS NOT NULL', mediaId(seriesIdentity), seasonNumber);
       return rows.map((row) => row.provider_id);
+    });
+  }
+
+  async getWatchedEpisodeSnapshot(identity: MediaIdentity): Promise<WatchedEpisodeSnapshot[]> {
+    return this.run("Couldn't load episode progress.", async (db) => {
+      const rows = await db.getAllAsync<{
+        id: string;
+        season_number: number;
+        episode_number: number;
+        provider_id: string;
+        watched_at: string | null;
+        rewatch_count: number | null;
+      }>(
+        `SELECT e.id, e.season_number, e.episode_number, e.provider_id, e.watched_at, e.rewatch_count
+         FROM tracked_episodes e
+         JOIN tracked_media m ON m.id = e.series_id
+         WHERE m.provider = ? AND m.media_type = ? AND m.provider_id = ?
+           AND e.watched_at IS NOT NULL
+         ORDER BY e.season_number, e.episode_number`,
+        identity.provider, identity.mediaType, identity.providerId,
+      );
+      return rows.filter((row) => typeof row.watched_at === 'string').map((row) => ({
+        id: row.id,
+        seasonNumber: row.season_number,
+        episodeNumber: row.episode_number,
+        providerId: row.provider_id,
+        watchedAt: row.watched_at as string,
+        rewatchCount: Math.max(0, row.rewatch_count ?? 0),
+      }));
+    });
+  }
+
+  async restoreWatchedEpisodes(media: CatalogMedia, snapshot: WatchedEpisodeSnapshot[]): Promise<void> {
+    ensureTrackableSeries(media);
+    if (!snapshot.length) return;
+    await this.run("Couldn't restore episode progress.", async (db) => {
+      await db.withExclusiveTransactionAsync(async (tx) => {
+        await ensureSeries(tx, media);
+        for (const episode of snapshot) {
+          await tx.runAsync(
+            'UPDATE tracked_episodes SET watched_at = ?, rewatch_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND series_id = ?',
+            episode.watchedAt, episode.rewatchCount, episode.id, media.id,
+          );
+        }
+        const now = new Date().toISOString();
+        const rows = await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ? AND watched_at IS NOT NULL ORDER BY season_number, episode_number', media.id);
+        await enqueueSyncChanges(tx, rows.map((row) => episodeSyncChange(media, mapEpisode(row), { deleted: false, updatedAt: now, watchedAt: row.watched_at ?? undefined, rewatchCount: row.rewatch_count ?? 0 })));
+        // Recompute completion, but never remove a still-in-progress watchlist row.
+        await syncSeriesCompletion(tx, media, now);
+        await tx.runAsync('UPDATE tracked_series SET updated_at = CURRENT_TIMESTAMP WHERE media_id = ?', media.id);
+      });
+    });
+  }
+
+  /**
+   * Startup repair for libraries written before weekly seasons were handled:
+   * "mark whole season/series" used to tick future episodes too. Clears those
+   * watches, refreshes the series completion flag, and queues tombstones so a
+   * sync cannot bring them back. Idempotent — a clean library returns 0.
+   */
+  async repairUnairedEpisodeWatches(): Promise<number> {
+    return this.run("Couldn't repair episode progress.", async (db) => {
+      const watched = await db.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE watched_at IS NOT NULL');
+      const unaired = watched.filter((row) => !hasAired(row.air_date ?? undefined));
+      if (!unaired.length) return 0;
+      const groups = new Map<string, EpisodeRow[]>();
+      for (const row of unaired) {
+        const group = groups.get(row.series_id);
+        if (group) group.push(row);
+        else groups.set(row.series_id, [row]);
+      }
+      await db.withExclusiveTransactionAsync(async (tx) => {
+        const now = new Date().toISOString();
+        for (const [seriesId, episodes] of groups) {
+          const mediaRow = await tx.getFirstAsync<MediaRow>('SELECT * FROM tracked_media WHERE id = ?', seriesId);
+          if (!mediaRow) continue;
+          const media = mapMedia(mediaRow);
+          await clearEpisodeRowsWatched(tx, episodes.map((row) => row.id));
+          await enqueueSyncChanges(tx, episodes.map((row) => episodeSyncChange(media, mapEpisode(row), { deleted: true, updatedAt: now, rewatchCount: 0 })));
+          const counts = await tx.getFirstAsync<{ watched: number }>('SELECT COUNT(*) AS watched FROM tracked_episodes WHERE series_id = ? AND watched_at IS NOT NULL', seriesId);
+          const total = knownEpisodeTotal(media);
+          const completed = Boolean(total && (counts?.watched ?? 0) >= total);
+          const tracked = await tx.getFirstAsync<{ completed: number | null }>('SELECT completed FROM tracked_series WHERE media_id = ?', seriesId);
+          if (tracked && (tracked.completed === 1) !== completed) {
+            await tx.runAsync('UPDATE tracked_series SET updated_at = ?, completed = ?, completed_at = ? WHERE media_id = ?', now, completed ? 1 : 0, completed ? now : null, seriesId);
+            await enqueueSyncChange(tx, { entityType: 'series', entityKey: media.id, provider: media.provider, mediaType: media.mediaType, providerId: media.providerId, deleted: false, updatedAt: now, media, watchedAt: completed ? now : undefined, completed });
+            if (completed) await dropWatchlistEntry(tx, media, now);
+          }
+        }
+      });
+      return unaired.length;
     });
   }
 
@@ -722,10 +1038,13 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
   async getSeriesProgress(): Promise<SeriesProgress[]> {
     return this.run("Couldn't load series progress.", async (db) => {
       const series = await db.getAllAsync<SeriesRow>(
-        `SELECT m.*, t.completed AS completed, t.completed_at AS completed_at, (SELECT MAX(e.watched_at) FROM tracked_episodes e WHERE e.series_id = m.id) AS watched_at,
+        `SELECT m.*, t.completed AS completed, t.completed_at AS completed_at, ap.watched_count AS anime_watched_count, ap.updated_at AS anime_watched_at,
+          (SELECT MAX(e.watched_at) FROM tracked_episodes e WHERE e.series_id = m.id) AS watched_at,
           (SELECT COUNT(*) FROM tracked_episodes e WHERE e.series_id = m.id AND e.watched_at IS NOT NULL) AS watched_count,
           (SELECT COUNT(*) FROM tracked_episodes e WHERE e.series_id = m.id) AS cached_count
-         FROM tracked_series t JOIN tracked_media m ON m.id = t.media_id ORDER BY t.updated_at DESC, m.title COLLATE NOCASE`,
+         FROM tracked_series t JOIN tracked_media m ON m.id = t.media_id
+         LEFT JOIN anime_progress ap ON ap.media_id = m.id
+         ORDER BY t.updated_at DESC, m.title COLLATE NOCASE`,
       );
       const episodes = await db.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes ORDER BY season_number, episode_number');
       return series.map((row) => toProgress(row, episodes.filter((episode) => episode.series_id === row.id)));
@@ -733,19 +1052,25 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
   }
 
   async getContinueWatching(): Promise<ContinueWatchingItem[]> {
-    return (await this.getSeriesProgress()).filter((item) => item.watchedEpisodeCount > 0 && !item.isComplete && Boolean(item.nextEpisode || item.nextSeasonNumber));
+    return (await this.getSeriesProgress()).filter((item) =>
+      item.watchedEpisodeCount > 0
+      && !item.isComplete
+      && Boolean(item.nextEpisode || item.nextSeasonNumber || item.media.mediaType === 'anime'),
+    );
   }
 
   async getWatchedLibrary(): Promise<WatchedLibraryItem[]> {
     return this.run("Couldn't load watched titles.", async (db) => {
       const movies = await db.getAllAsync<MediaRow & { watched_at: string }>('SELECT m.*, w.watched_at FROM movie_watches w JOIN tracked_media m ON m.id = w.media_id ORDER BY w.watched_at DESC, m.title COLLATE NOCASE');
       const seriesRows = await db.getAllAsync<SeriesRow>(
-        `SELECT m.*, (SELECT MAX(e.watched_at) FROM tracked_episodes e WHERE e.series_id = m.id) AS watched_at,
+        `SELECT m.*, ap.watched_count AS anime_watched_count,
+          (SELECT MAX(e.watched_at) FROM tracked_episodes e WHERE e.series_id = m.id) AS watched_at,
           t.completed AS completed, t.completed_at AS completed_at,
           (SELECT COUNT(*) FROM tracked_episodes e WHERE e.series_id = m.id AND e.watched_at IS NOT NULL) AS watched_count,
           (SELECT COUNT(*) FROM tracked_episodes e WHERE e.series_id = m.id) AS cached_count
          FROM tracked_media m
          JOIN tracked_series t ON t.media_id = m.id
+         LEFT JOIN anime_progress ap ON ap.media_id = m.id
          WHERE t.completed = 1 OR EXISTS (SELECT 1 FROM tracked_episodes e WHERE e.series_id = m.id AND e.watched_at IS NOT NULL)
          ORDER BY m.updated_at DESC, m.title COLLATE NOCASE`,
       );
@@ -1076,15 +1401,13 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
         const summary = media.seasonSummaries?.find((item) => item.seasonNumber === season.seasonNumber);
         await saveSeason(tx, media, { ...season, episodeCount: summary?.episodeCount });
         const now = new Date().toISOString();
-        await tx.runAsync(
-          'UPDATE tracked_episodes SET watched_at = COALESCE(watched_at, ?), rewatch_count = rewatch_count + CASE WHEN watched_at IS NOT NULL THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP WHERE series_id = ? AND season_number = ? AND episode_number <= ?',
-          now, media.id, season.seasonNumber, episodeNumber,
-        );
         const rows = await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ? AND season_number = ? AND episode_number <= ? ORDER BY episode_number', media.id, season.seasonNumber, episodeNumber);
-        for (const row of rows) {
-          const episode = mapEpisode(row);
-          await enqueueSyncChange(tx, { entityType: 'episode', entityKey: `${media.id}:${episode.seasonNumber}:${episode.episodeNumber}`, provider: media.provider, mediaType: media.mediaType, providerId: episode.providerId, seasonNumber: episode.seasonNumber, episodeNumber: episode.episodeNumber, deleted: false, updatedAt: now, media, watchedAt: row.watched_at ?? undefined, episode, rewatchCount: row.rewatch_count ?? 0 });
-        }
+        // Defense in depth: even a caller that passes a future position must
+        // never write a watch onto an episode that has not aired.
+        const airedRows = rows.filter((row) => hasAired(row.air_date ?? undefined));
+        await markEpisodeRowsWatched(tx, airedRows.map((row) => row.id), now);
+        const after = await tx.getAllAsync<EpisodeRow>('SELECT * FROM tracked_episodes WHERE series_id = ? AND season_number = ? AND episode_number <= ? ORDER BY episode_number', media.id, season.seasonNumber, episodeNumber);
+        await enqueueSyncChanges(tx, after.filter((row) => hasAired(row.air_date ?? undefined)).map((row) => episodeSyncChange(media, mapEpisode(row), { deleted: false, updatedAt: now, watchedAt: row.watched_at ?? undefined, rewatchCount: row.rewatch_count ?? 0 })));
         await tx.runAsync('UPDATE tracked_series SET updated_at = CURRENT_TIMESTAMP WHERE media_id = ?', media.id);
         // Finishing the last episode completes the series and clears the watchlist row.
         await syncSeriesCompletion(tx, media, now);
@@ -1319,6 +1642,30 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
     }
     const titles = Array.isArray(rows.tracked_media) ? rows.tracked_media.length : 0;
     await this.run("Couldn't restore your backup.", async (db) => {
+      // Validate every table/column/value before the first DELETE. Column
+      // names reach SQL as identifiers, so a hand-edited backup must never be
+      // able to inject SQL or wipe the library with a half-valid file.
+      const allowedColumns = new Map<string, Set<string>>();
+      for (const table of BACKUP_TABLES) {
+        const info = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+        allowedColumns.set(table, new Set(info.map((column) => column.name)));
+      }
+      for (const table of BACKUP_TABLES) {
+        const tableRows = rows[table];
+        if (tableRows === undefined) continue;
+        if (!Array.isArray(tableRows)) throw new AppError('validation', `This backup has an invalid ${table} section.`);
+        for (const row of tableRows) {
+          if (!row || typeof row !== 'object' || Array.isArray(row)) throw new AppError('validation', `This backup has an invalid row in ${table}.`);
+          for (const [column, value] of Object.entries(row)) {
+            if (!allowedColumns.get(table)?.has(column)) {
+              throw new AppError('validation', `This backup contains an unknown column (${column}) in ${table}.`);
+            }
+            if (value !== null && typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+              throw new AppError('validation', `This backup has an unsupported value in ${table}.${column}.`);
+            }
+          }
+        }
+      }
       await db.withExclusiveTransactionAsync(async (tx) => {
         for (const table of [...BACKUP_TABLES].reverse()) await tx.runAsync(`DELETE FROM ${table}`);
         for (const table of BACKUP_TABLES) {
@@ -1329,10 +1676,17 @@ export class SqliteWatchStateRepository implements WatchStateRepository, WatchSt
             const placeholders = columns.map(() => '?').join(', ');
             await tx.runAsync(
               `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`,
-              ...(columns.map((column) => row[column]) as (string | number | null)[]),
+              ...(columns.map((column) => {
+                const value = row[column];
+                if (typeof value === 'boolean') return value ? 1 : 0;
+                return value as string | number | null;
+              })),
             );
           }
         }
+        // The restored library is now the local truth. Queue it with a fresh
+        // timestamp so a previous queue entry or older cloud row cannot undo it.
+        await rebuildSyncQueueAfterRestore(tx, new Date().toISOString());
       });
     });
     return { titles };

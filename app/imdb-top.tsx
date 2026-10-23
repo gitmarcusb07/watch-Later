@@ -37,7 +37,7 @@ export default function ImdbTopScreen() {
         return <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected }} accessibilityLabel={`Show IMDb top ${option === 'movie' ? 'movies' : 'series'}`} onPress={() => { if (!selected) { triggerLightHaptic(); setMedia(option); } }} style={[styles.pill, selected && styles.pillActive]}><AppText variant="label" style={selected ? styles.pillTextActive : styles.pillText}>{option === 'movie' ? 'Movies' : 'Series'}</AppText></Pressable>;
       })}
     </View>
-    {query.isLoading ? <FlatList data={[0, 1, 2, 3, 4, 5]} keyExtractor={(item) => String(item)} numColumns={2} columnWrapperStyle={styles.gridRow} contentContainerStyle={styles.grid} style={styles.flat} renderItem={() => <PosterSkeleton />} showsVerticalScrollIndicator={false} />
+    {query.isLoading ? <FlatList data={[0, 1, 2, 3, 4, 5]} keyExtractor={(item) => String(item)} numColumns={2} columnWrapperStyle={styles.gridRow} contentContainerStyle={styles.grid} style={styles.flat} renderItem={() => <PosterSkeleton width={cardWidth} />} showsVerticalScrollIndicator={false} />
       : query.isError ? <ErrorView message="Could not load Top 250. Check your connection and try again." onRetry={() => void query.refetch()} />
       : items.length ? <FlatList
         data={items}

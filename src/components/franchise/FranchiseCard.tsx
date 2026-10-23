@@ -1,6 +1,7 @@
 import { memo, useState } from 'react';
-import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { AppText } from '@/components/common/AppText';
+import { RemoteImage } from '@/components/common/RemoteImage';
 import { triggerLightHaptic } from '@/lib/haptics';
 import { colors, radius, spacing } from '@/theme';
 
@@ -30,9 +31,8 @@ export const FranchiseCard = memo(function FranchiseCard({ title, itemCount, bac
     >
       <View style={[styles.art, { height: width * 0.58 }]}>
         {showImage ? (
-          <Image
-            source={{ uri: backdropUri }}
-            resizeMode="cover"
+          <RemoteImage
+            uri={backdropUri}
             style={styles.image}
             onError={() => backdropUri && setFailedUri(backdropUri)}
           />

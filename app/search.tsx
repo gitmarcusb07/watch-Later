@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { openURL } from 'expo-linking';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { AppButton } from '@/components/buttons/AppButton';
@@ -14,7 +13,7 @@ import { showDialog, showToast } from '@/components/feedback/AppDialog';
 import { CustomEntryDialog } from '@/components/media/CustomEntryDialog';
 import { SearchResultCard } from '@/components/media/SearchResultCard';
 import { ExploreGenreTile } from '@/components/search/ExploreGenreTile';
-import { useCatalogSearch, useTrending } from '@/features/catalog/hooks';
+import { prefetchMedia, useCatalogSearch, useTrending } from '@/features/catalog/hooks';
 import { CatalogError } from '@/domain/errors/CatalogError';
 import { mediaRouteId } from '@/features/catalog/mediaIdentity';
 import { genreById } from '@/features/genres/catalog';
@@ -77,7 +76,7 @@ export default function SearchScreen() {
   }, [debouncedQuery, search.data, search.isLoading, trendingTitles.data, watchlistTitles.data, watchedTitles.data]);
   useEffect(() => () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); }, []);
   const searching = Boolean(normalized) && (normalized !== debouncedQuery || search.isLoading);
-  const openResult = (id: string) => { Keyboard.dismiss(); router.push({ pathname: '/media/[id]', params: { id } }); };
+  const openResult = (id: string) => { Keyboard.dismiss(); prefetchMedia(id); router.push({ pathname: '/media/[id]', params: { id } }); };
   const openGenre = (genreId: number) => { Keyboard.dismiss(); router.push({ pathname: '/genre/[id]', params: { id: String(genreId) } }); };
   const changeQuery = (value: string) => {
     setQuery(value);
@@ -101,26 +100,20 @@ export default function SearchScreen() {
   const resultCount = search.data?.items.length ?? 0;
 
   return <Screen scroll>
-    <LinearGradient
-      colors={['#2B1745', '#190F2A', colors.background]}
-      locations={[0, 0.62, 1]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.heroBand}
-    >
-      <FadeInView>
-        <View style={styles.topRow}>
-          <IconButton name="arrow-back" label="Go back" onPress={() => router.back()} />
-          <View style={styles.header}>
-            <AppText variant="caption" style={styles.eyebrow}>EXPLORE</AppText>
-            <AppText style={styles.heroTitle}>Find your next{'\n'}obsession.</AppText>
-            <AppText variant="bodySmall" muted style={styles.heroSubtitle}>What are you in the mood for?</AppText>
-          </View>
+    <FadeInView>
+      <View style={styles.topRow}>
+        <IconButton name="arrow-back" label="Go back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />
+        <View style={styles.header}>
+          <AppText variant="caption" style={styles.eyebrow}>SEARCH</AppText>
+          <AppText style={styles.heroTitle}>Find your next{'\n'}obsession.</AppText>
+          <AppText variant="bodySmall" muted style={styles.heroSubtitle}>What are you in the mood for?</AppText>
         </View>
-      </FadeInView>
+      </View>
+    </FadeInView>
+    <View style={styles.searchArea}>
       <View style={[styles.inputWrap, normalized.length > 0 && styles.inputFilled]}>
         <Ionicons name="search" size={22} color={normalized.length > 0 ? colors.accent : colors.textMuted} />
-        <TextInput accessibilityLabel="Search movies, shows and anime" placeholder="Search titles, genres, people…" placeholderTextColor={colors.textMuted} value={query} onChangeText={changeQuery} returnKeyType="search" onSubmitEditing={Keyboard.dismiss} style={styles.input} selectionColor={colors.accent} />
+        <TextInput accessibilityLabel="Search movies, shows and anime" placeholder="Search titles, genres, people…" placeholderTextColor={colors.textMuted} value={query} onChangeText={changeQuery} returnKeyType="search" onSubmitEditing={Keyboard.dismiss} maxLength={120} style={styles.input} selectionColor={colors.accent} />
         {query.length > 0 ? <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => changeQuery('')} hitSlop={12}><Ionicons name="close-circle" size={20} color={colors.textSecondary} /></Pressable> : null}
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters} keyboardShouldPersistTaps="handled">
@@ -129,7 +122,7 @@ export default function SearchScreen() {
           return <Pressable key={item.value} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { if (!selected) triggerLightHaptic(); setFilter(item.value); }} style={[styles.filter, selected && styles.filterActive]}><AppText variant="label" style={selected ? styles.filterTextActive : styles.filterText}>{item.label}</AppText></Pressable>;
         })}
       </ScrollView>
-    </LinearGradient>
+    </View>
     {!normalized ? <View style={styles.explore}>
       <FadeInView delay={80}>
         <View style={styles.sectionHeader}>
@@ -206,13 +199,13 @@ export default function SearchScreen() {
 }
 
 const styles = StyleSheet.create({
-  heroBand: { marginHorizontal: -spacing.xl, paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.lg, borderBottomLeftRadius: 30, borderBottomRightRadius: 30, overflow: 'hidden' },
-  topRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.md },
-  header: { flex: 1, gap: spacing.xs },
-  eyebrow: { color: colors.accent, letterSpacing: 2.4, fontWeight: '700' },
-  heroTitle: { color: colors.white, fontSize: 37, lineHeight: 41, fontWeight: '800', letterSpacing: -1.1 },
+  topRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, paddingTop: spacing.lg, paddingBottom: spacing.sm },
+  header: { flex: 1, gap: 2 },
+  eyebrow: { color: colors.accent, letterSpacing: 2.2, fontWeight: '700' },
+  heroTitle: { color: colors.white, fontSize: 32, lineHeight: 36, fontWeight: '800', letterSpacing: -0.9 },
   heroSubtitle: { marginTop: spacing.xs },
-  inputWrap: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', backgroundColor: 'rgba(15,13,23,0.82)', marginTop: spacing.sm },
+  searchArea: { paddingBottom: spacing.sm },
+  inputWrap: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, marginTop: spacing.sm },
   inputFilled: { borderColor: colors.accent, backgroundColor: colors.surface },
   input: { flex: 1, color: colors.textPrimary, ...typography.body, fontSize: 16 },
   filters: { flexDirection: 'row', gap: spacing.sm, paddingTop: spacing.lg, paddingRight: spacing.sm },
