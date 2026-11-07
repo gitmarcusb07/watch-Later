@@ -1,68 +1,10 @@
 import { supabase } from './client';
 
-export interface ImdbTopItem {
-  rank: number;
-  tmdbId: number;
-  mediaType: 'movie' | 'series';
-  imdbId: string;
-  title: string;
-  year?: number;
-  posterUrl?: string;
-  rating: number;
-  votes: number;
-}
-
 interface ImdbRatingRow {
   tmdb_id: number;
   media_type: string;
-  imdb_id: string;
-  title: string;
-  year: number | null;
-  poster_url: string | null;
   rating: number;
   votes: number;
-  list_rank: number | null;
-}
-
-/** Validates one snapshot row. Null when malformed — never show a broken rank. */
-export function mapImdbRow(row: ImdbRatingRow): ImdbTopItem | null {
-  if (!Number.isSafeInteger(row.tmdb_id)) return null;
-  if (row.media_type !== 'movie' && row.media_type !== 'series') return null;
-  if (typeof row.imdb_id !== 'string' || !row.imdb_id) return null;
-  if (typeof row.title !== 'string' || !row.title) return null;
-  if (typeof row.rating !== 'number' || !Number.isFinite(row.rating)) return null;
-  if (typeof row.votes !== 'number' || !Number.isFinite(row.votes)) return null;
-  if (!Number.isSafeInteger(row.list_rank) || (row.list_rank ?? 0) < 1) return null;
-  const rank = row.list_rank ?? 0;
-  return {
-    rank,
-    tmdbId: row.tmdb_id,
-    mediaType: row.media_type,
-    imdbId: row.imdb_id,
-    title: row.title,
-    year: typeof row.year === 'number' ? row.year : undefined,
-    posterUrl: typeof row.poster_url === 'string' && row.poster_url ? row.poster_url : undefined,
-    rating: row.rating,
-    votes: row.votes,
-  };
-}
-
-/** Weekly IMDb Top 250 snapshot, rank order. Empty when offline/unconfigured. */
-export async function fetchImdbTop(mediaType: 'movie' | 'series', limit = 250): Promise<ImdbTopItem[]> {
-  if (!supabase) return [];
-  try {
-    const { data, error } = await supabase
-      .from('imdb_ratings')
-      .select('tmdb_id,media_type,imdb_id,title,year,poster_url,rating,votes,list_rank')
-      .eq('media_type', mediaType)
-      .gte('list_rank', 1)
-      .order('list_rank', { ascending: true })
-      .limit(Math.max(1, Math.min(limit, 250)));
-    if (error || !data) return [];
-    return (data as ImdbRatingRow[]).map(mapImdbRow).filter((item): item is ImdbTopItem => item !== null);
-  } catch {
-    return [];
-  }
 }
 
 export interface ImdbRating {
@@ -78,7 +20,8 @@ export function mapImdbRating(row: Pick<ImdbRatingRow, 'rating' | 'votes'>): Imd
 }
 
 /** Batch IMDb scores for displayed titles, keyed `mediaType:tmdbId`. Never throws. */
-export async function fetchImdbRatingsFor(items: { tmdbId: number; mediaType: 'movie' | 'series' }[]): Promise<Map<string, ImdbRating>> {  const result = new Map<string, ImdbRating>();
+export async function fetchImdbRatingsFor(items: { tmdbId: number; mediaType: 'movie' | 'series' }[]): Promise<Map<string, ImdbRating>> {
+  const result = new Map<string, ImdbRating>();
   const client = supabase;
   if (!client || !items.length) return result;
   try {
@@ -109,15 +52,4 @@ export async function fetchImdbRatingsFor(items: { tmdbId: number; mediaType: 'm
     // Ratings are decoration: the list renders without them.
   }
   return result;
-}
-
-/**
- * One mixed Top 100 from both IMDb lists: rating first, vote count breaks
- * ties, caller's limit caps the result. Movies and series compete on equal
- * terms — rank is positional, not the per-list list_rank.
- */
-export function mixImdbTops(movies: ImdbTopItem[], series: ImdbTopItem[], limit = 100): ImdbTopItem[] {
-  return [...movies, ...series]
-    .sort((a, b) => b.rating - a.rating || b.votes - a.votes)
-    .slice(0, Math.max(0, limit));
 }

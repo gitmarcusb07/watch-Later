@@ -44,7 +44,7 @@ const STEPS: CoachStep[] = [
   {
     icon: 'calendar',
     title: 'Upcoming & discover',
-    message: 'The Upcoming tab lists what’s next. Home has new releases, the Top 100, genres and franchises.',
+    message: 'The Upcoming tab lists what’s next. Home has new releases, genres and franchises.',
   },
   {
     icon: 'download',

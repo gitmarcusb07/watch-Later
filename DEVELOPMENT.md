@@ -63,11 +63,11 @@ Scheduling (manual dashboard step, NOT done automatically): Edge Functions -> ge
 Manual trigger: POST https://<ref>.supabase.co/functions/v1/generate-global-hits with apikey header + x-hits-admin-key and body {periodType, periodKey} (add dryRun:true to compute without publishing).
 
 
-## IMDb Top 250 pipeline
+## IMDb ratings pipeline
 
 Weekly snapshot in public.imdb_ratings (migration 202610110004: public SELECT, service-role writes). The .github/workflows/imdb-ratings.yml Action (Sundays 03:00 UTC, stdlib-only Python, manual Run workflow button available) downloads official IMDb dumps, ranks with IMDb's own weighted formula (25k-vote minimum, adult excluded), maps the top candidates to TMDB ids via /find, and upserts 250 movies + 250 series with stable ranks. Refuses to publish partial lists under 150 titles per side.
 
-Repo secrets required (GitHub Settings -> Secrets -> Actions, manual one-time step): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TMDB_API_KEY. The app reads the table with the anon key and never sees these values. First run: Actions tab -> imdb-ratings -> Run workflow, then check More -> IMDb Top 250 in the app.
+Repo secrets required (GitHub Settings -> Secrets -> Actions, manual one-time step): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TMDB_API_KEY. The app reads the table with the anon key and never sees these values. First run: Actions tab -> imdb-ratings -> Run workflow, then check IMDb scores on creator suggestions and Global Hits cards in the app.
 
  The same run also snapshots recent releases (current + previous year, 1000+ votes, unranked rows) so detail screens and Global Hits cards can show IMDb scores for fresh titles.
 

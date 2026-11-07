@@ -17,8 +17,7 @@ import { mediaRouteId } from '@/features/catalog/mediaIdentity';
 import { homeFranchises } from '@/features/franchises/catalog';
 import { GENRES } from '@/features/genres/catalog';
 import { useContinueWatching, useWatchedLibrary, useWatchlist, watchKeys } from '@/features/watchState/hooks';
-import { useImdbTop, useRecentlyReleased } from '@/features/catalog/hooks';
-import { mixImdbTops } from '@/data/remote/supabase/imdbRatings';
+import { useRecentlyReleased } from '@/features/catalog/hooks';
 import { triggerLightHaptic } from '@/lib/haptics';
 import { maybePromptNotificationPermission } from '@/features/notifications/permissionGate';
 import type { CatalogMedia } from '@/domain/models/media';
@@ -37,12 +36,6 @@ export default function HomeScreen() {
   const watchlistQuery = useWatchlist();
   const watchedQuery = useWatchedLibrary();
   const recentQuery = useRecentlyReleased();
-  const topMoviesQuery = useImdbTop('movie');
-  const topSeriesQuery = useImdbTop('series');
-  const topItems = mixImdbTops(topMoviesQuery.data ?? [], topSeriesQuery.data ?? []).slice(0, 6);
-  const topLoading = topMoviesQuery.isLoading || topSeriesQuery.isLoading;
-  const topFailed = (topMoviesQuery.isError || topSeriesQuery.isError) && !topItems.length;
-  const refetchTop = () => { void Promise.all([topMoviesQuery.refetch(), topSeriesQuery.refetch()]); };
 
   const watchlistCount = watchlistQuery.data?.length ?? 0;
   const watchedCount = (watchedQuery.data ?? []).length;
@@ -90,8 +83,8 @@ export default function HomeScreen() {
     </FadeInView>
 
     {/* Section order by importance: resume what you were watching, this week's
-        new drops, the all-time best, then browse by mood, and the franchise
-        deep-dive (most specialized) last. */}
+        new drops, then browse by mood, and the franchise deep-dive (most
+        specialized) last. */}
     <FadeInView delay={90}>
     <View style={styles.section}><SectionHeader title="Continue Watching" subtitle="Pick up right where you left off" />
       {continueQuery.isLoading ? <LoadingView label="Loading your progress" /> : continueQuery.isError ? <ErrorView message="Couldn't load your progress. Try again." onRetry={() => void continueQuery.refetch()} /> : continueQuery.data?.length ? continueQuery.data.slice(0, 2).map((item) => <ContinueWatchingCard key={item.media.id} title={item.media.title} posterUri={item.media.posterUrl} subtitle={item.nextEpisode ? `S${item.nextEpisode.seasonNumber} E${item.nextEpisode.episodeNumber} · ${item.nextEpisode.title}` : `Continue with Season ${item.nextSeasonNumber}`} progress={item.progress} palette={['#2A2438', '#1F1F26']} onPress={() => router.push({ pathname: '/media/[id]', params: { id: mediaRouteId(item.media), season: String(item.nextEpisode?.seasonNumber ?? item.nextSeasonNumber) } })} />) : <Pressable accessibilityRole="button" accessibilityLabel="Find a series to track" onPress={() => router.push('/search')} style={({ pressed }) => [styles.emptyRow, pressed && styles.pressed]}><View style={styles.emptyIcon}><Ionicons name="play-circle-outline" size={20} color={colors.accent} /></View><View style={styles.emptyCopy}><AppText variant="bodyMedium">Nothing in progress</AppText><AppText variant="caption" muted numberOfLines={1}>Track a series to pick up here</AppText></View><Ionicons name="chevron-forward" size={18} color={colors.accent} /></Pressable>}
@@ -116,21 +109,6 @@ export default function HomeScreen() {
     <FadeInView delay={220}>
     <View style={styles.section}>
       <View style={styles.rowHeader}>
-        <SectionHeader title="Top 100" subtitle="IMDb's highest-rated of all time" />
-        <Pressable accessibilityRole="button" accessibilityLabel="See all top 100" onPress={() => router.push('/top-100')} style={styles.seeAll}><AppText variant="label" style={styles.seeAllText}>See all</AppText><Ionicons name="chevron-forward" size={15} color={colors.accent} /></Pressable>
-      </View>
-      {topLoading ? <View style={styles.skeletonRow}>{[0, 1, 2, 3].map((index) => <PosterSkeleton key={index} />)}</View>
-        : topFailed ? <ErrorView message="Couldn't load the top 100." onRetry={refetchTop} />
-        : topItems.length ? <FlatList horizontal data={topItems} keyExtractor={(item) => `${item.mediaType}:${item.tmdbId}`} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.carousel} renderItem={({ item, index }) =>
-          <PosterCard title={item.title} subtitle={`IMDb ★ ${item.rating.toFixed(1)}${item.year ? ` · ${item.year}` : ''}`} posterUri={item.posterUrl} badge={`#${index + 1}`} onPress={() => openMedia(`tmdb:${item.mediaType}:${item.tmdbId}`)} />
-        } />
-        : null}
-    </View>
-    </FadeInView>
-
-    <FadeInView delay={280}>
-    <View style={styles.section}>
-      <View style={styles.rowHeader}>
         <SectionHeader title="Genres" subtitle="Movies, shows, and anime by vibe" />
         <Pressable accessibilityRole="button" accessibilityLabel="See all genres" onPress={() => router.push('/genres' as never)} style={styles.seeAll}><AppText variant="label" style={styles.seeAllText}>See all</AppText><Ionicons name="chevron-forward" size={15} color={colors.accent} /></Pressable>
       </View>
@@ -145,7 +123,7 @@ export default function HomeScreen() {
     </View>
     </FadeInView>
 
-    <FadeInView delay={340}>
+    <FadeInView delay={280}>
     <View style={styles.section}>
       <View style={styles.rowHeader}>
         <SectionHeader title="Franchises" subtitle="Movie & show universes, in order" />

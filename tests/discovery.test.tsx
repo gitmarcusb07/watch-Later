@@ -421,7 +421,7 @@ describe('discovery hooks and home structure', () => {
     const home = readFileSync('app/(tabs)/index.tsx', 'utf8');
     expect(home).toMatch(/Continue Watching/);
     expect(home).toMatch(/New Releases/);
-    expect(home).toMatch(/Top 100/);
+    expect(home).not.toMatch(/Top 100/);
     expect(home).toMatch(/\/media\/\[id\]/);
     expect(home).not.toMatch(/Your Watchlist/);
     expect(home).not.toMatch(/Most Interested/);

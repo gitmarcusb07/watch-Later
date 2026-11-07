@@ -385,7 +385,7 @@ describe('genre screens', () => {
     await act(async () => { renderer.unmount(); });
   });
 
-  it('home offers genres beside New Releases and Top 100', () => {
+  it('home offers genres beside New Releases', () => {
     const home = readFileSync('app/(tabs)/index.tsx', 'utf8');
     expect(home).toMatch(/SectionHeader title="Genres"/);
     expect(home).toMatch(/'\/genres'/);

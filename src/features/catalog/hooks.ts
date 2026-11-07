@@ -4,7 +4,6 @@ import type { PagedCatalog, SuggestionFilters } from '@/domain/repositories/Cata
 import { catalogRepository } from '@/data/remote/catalog/RemoteCatalogRepository';
 import { deviceRegion } from '@/data/remote/catalog/region';
 import { parseMediaRouteId } from '@/features/catalog/mediaIdentity';
-import { fetchImdbTop } from '@/data/remote/supabase/imdbRatings';
 import { fetchImdbRatingsFor, type ImdbRating } from '@/data/remote/supabase/imdbRatings';
 import { queryClient } from '@/lib/query/queryClient';
 
@@ -353,19 +352,6 @@ export function useUpcomingSeriesPages(enabled = true) {
 
 export function useUpcomingAnimePages(enabled = true) {
   return useInfiniteCatalog(['catalog', 'upcoming', 'anime'], (page, signal) => catalogRepository.getUpcomingAnimePage(page, signal), enabled);
-}
-
-/** Weekly IMDb Top 250 snapshot from Supabase. Empty when offline or not yet published. */
-export function useImdbTop(media: 'movie' | 'series', enabled = true) {
-  return useQuery({
-    queryKey: ['catalog', 'imdb-top', media] as const,
-    queryFn: () => fetchImdbTop(media),
-    enabled,
-    // Weekly snapshot: a day of staleness keeps repeat visits free.
-    staleTime: 24 * 60 * 60_000,
-    gcTime: 7 * 24 * 60 * 60_000,
-    retry: 1,
-  });
 }
 
 /** IMDb scores for visible titles, keyed `mediaType:tmdbId`. Decoration only — never blocks lists. */
