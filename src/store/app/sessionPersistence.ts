@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AUTH_ENABLED } from '@/config/features';
 import type { SessionState } from '@/domain/models/session';
 import { useSessionStore } from './sessionStore';
 import { supabase } from '@/data/remote/supabase/client';
@@ -38,6 +39,19 @@ export async function hydrateSession(): Promise<void> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
     const saved = raw ? JSON.parse(raw) as PersistedSession : undefined;
+    if (!AUTH_ENABLED) {
+      // Local-only build: keep onboarding state and the stored guest id, but
+      // never restore or validate a cloud session. This also avoids the
+      // Supabase getUser() network check on startup.
+      const guest = saved?.session.mode === 'guest'
+        ? saved.session
+        : { mode: 'guest' as const, userId: `guest-${Date.now()}` };
+      const onboardingComplete = saved?.onboardingComplete ?? false;
+      useSessionStore.getState().setSession(guest);
+      useSessionStore.getState().setOnboardingComplete(onboardingComplete);
+      await persistSession(guest, onboardingComplete);
+      return;
+    }
     if (saved?.session && typeof saved.onboardingComplete === 'boolean') {
       useSessionStore.getState().setSession(saved.session);
       useSessionStore.getState().setOnboardingComplete(saved.onboardingComplete);

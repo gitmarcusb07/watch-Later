@@ -14,7 +14,6 @@ import { useSyncStore } from '@/store/app/syncStore';
 import { useDialogStore } from '@/components/feedback/AppDialog';
 import NotificationsScreen from '../app/settings/notifications';
 import AboutScreen from '../app/about';
-import PrivacyScreen from '../app/privacy';
 import MoreScreen from '../app/(tabs)/more';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -252,9 +251,12 @@ describe('more menu and static screens', () => {
     const more = readFileSync('app/(tabs)/more.tsx', 'utf8');
     // Upcoming lives on its own tab, so the More menu must not repeat it.
     expect(more).not.toContain('/upcoming');
-    for (const route of ['/settings/notifications', '/favorites', '/about', '/privacy']) {
+    for (const route of ['/settings/notifications', '/favorites', '/about']) {
       expect(more).toContain(route);
     }
+    // Legal pages are hosted on the TeraPlayer website and open externally.
+    expect(more).toContain('PRIVACY_POLICY_URL');
+    expect(more).toContain('TERMS_URL');
     for (const removed of ['/settings/ratings', '/settings/appearance', '/collections', '/trash', '/history']) {
       expect(more).not.toContain(removed);
     }
@@ -262,7 +264,7 @@ describe('more menu and static screens', () => {
   });
 
   it('37-40. settings and info screens render', async () => {
-    for (const Screen of [NotificationsScreen, AboutScreen, PrivacyScreen]) {
+    for (const Screen of [NotificationsScreen, AboutScreen]) {
       let renderer!: ReturnType<typeof create>;
       await act(async () => { renderer = create(<Screen />); });
       expect(renderer.toJSON()).toBeTruthy();

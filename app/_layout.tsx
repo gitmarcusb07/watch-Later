@@ -6,11 +6,12 @@ import * as SplashScreen from "expo-splash-screen";
 import * as Haptics from "expo-haptics";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AppState, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { queryClient } from "@/lib/query/queryClient";
 import { installNavigationGuard } from "@/lib/navigationGuard";
+import { AUTH_ENABLED } from "@/config/features";
 import { colors } from "@/theme";
 import { logger } from "@/lib/logger";
 import { hydrateSession, persistSession } from "@/store/app/sessionPersistence";
@@ -59,9 +60,23 @@ import {
 
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
 
-if (!publishableKey) {
+if (AUTH_ENABLED && !publishableKey) {
   throw new Error(
     "Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Add your key to .env.\nRun: 1) clerk auth login  2) clerk link  3) clerk env pull — then restart the dev server.",
+  );
+}
+
+/**
+ * Mounts the account SDK only when accounts are enabled for this build. Public
+ * builds are local-only: they must not initialise Clerk or its Supabase bridge.
+ */
+function AuthGate({ children }: { children: ReactNode }) {
+  if (!AUTH_ENABLED) return <>{children}</>;
+  return (
+    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+      <ClerkSupabaseBridge />
+      {children}
+    </ClerkProvider>
   );
 }
 
@@ -119,6 +134,8 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    // Public builds are local-only: never subscribe to a cloud auth session.
+    if (!AUTH_ENABLED) return;
     const authClient = supabase;
     if (!authClient) return;
     const { data: subscription } = authClient.auth.onAuthStateChange(
@@ -195,7 +212,7 @@ export default function RootLayout() {
       if (state === "active") {
         void queryClient.resumePausedMutations();
         const session = useSessionStore.getState().session;
-        if (session.mode === "authenticated") handleAutoSyncForeground();
+        if (AUTH_ENABLED && session.mode === "authenticated") handleAutoSyncForeground();
         void refreshRemindersOnForeground();
         void refreshOttReminders();
         void refreshUpcomingReminders();
@@ -274,8 +291,7 @@ export default function RootLayout() {
   const appReady = hydrated && (databaseReady || startupError);
 
   return (
-    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
-      <ClerkSupabaseBridge />
+    <AuthGate>
       <AppErrorBoundary>
         <GestureHandlerRootView style={styles.root} onLayout={handleRootLayout}>
           <DialogProvider>
@@ -325,7 +341,7 @@ export default function RootLayout() {
           </DialogProvider>
         </GestureHandlerRootView>
       </AppErrorBoundary>
-    </ClerkProvider>
+    </AuthGate>
   );
 }
 

@@ -2,6 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { hydrateSession } from '@/store/app/sessionPersistence';
 import { useSessionStore } from '@/store/app/sessionStore';
 
+// Public builds ship with accounts off. This suite covers the dormant cloud
+// session code, so opt it into auth explicitly.
+jest.mock('@/config/features', () => ({ AUTH_ENABLED: true }));
+
 jest.mock('@/data/remote/supabase/client', () => ({
   supabase: {
     auth: {

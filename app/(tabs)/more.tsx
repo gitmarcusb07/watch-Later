@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
-import { useClerk } from '@clerk/expo';
+import { openURL } from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
 import { Animated, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useMemo, useState } from 'react';
@@ -21,17 +21,18 @@ import { syncService } from '@/features/sync/SyncService';
 import { persistSession } from '@/store/app/sessionPersistence';
 import { AppButton } from '@/components/buttons/AppButton';
 import { triggerLightHaptic } from '@/lib/haptics';
+import { PRIVACY_POLICY_URL, TERMS_URL } from '@/lib/legal';
 import { usePressScale } from '@/lib/pressScale';
 import type { SyncStatus } from '@/domain/models/sync';
 
 /** Rows hidden while accounts/notifications are off. Screens and logic stay. */
 const HIDDEN_MORE_ROWS = new Set(['Notifications', 'Global Hits', 'Upcoming on OTT']);
 
-const groups: { title: string; rows: { label: string; detail: string; icon: keyof typeof Ionicons.glyphMap; route: string; hint: string; beta?: boolean }[] }[] = [  { title: 'PREFERENCES', rows: [{ label: 'Notifications', detail: 'Reminders', icon: 'notifications-outline', route: '/settings/notifications', hint: 'Open Notification settings' }] },
+const groups: { title: string; rows: { label: string; detail: string; icon: keyof typeof Ionicons.glyphMap; route?: string; url?: string; hint: string; beta?: boolean }[] }[] = [  { title: 'PREFERENCES', rows: [{ label: 'Notifications', detail: 'Reminders', icon: 'notifications-outline', route: '/settings/notifications', hint: 'Open Notification settings' }] },
   { title: 'LIBRARY', rows: [{ label: 'Favorites', detail: 'Your favorite titles', icon: 'heart-outline', route: '/favorites', hint: 'Open Favorites' }] },
   { title: 'CREATE', rows: [{ label: 'Creator Studio', detail: 'Instagram-ready posts from your library', icon: 'color-wand-outline', route: '/creator', hint: 'Open Creator Studio (beta)', beta: true }] },
   { title: 'DISCOVER', rows: [{ label: 'Franchise Collections', detail: 'Movies & shows in order', icon: 'albums-outline', route: '/franchises', hint: 'Open franchise collections' }, { label: 'Global Hits', detail: 'Coming soon', icon: 'globe-outline', route: '/global-hits', hint: 'Open Global Hits rankings' }, { label: 'Upcoming on OTT', detail: 'Coming soon', icon: 'cloud-outline', route: '/ott-upcoming', hint: 'Open Upcoming on OTT' }, { label: 'New Releases', detail: 'Fresh movies and shows', icon: 'sparkles-outline', route: '/new-releases', hint: 'Open New Releases' }] },
-  { title: 'ABOUT', rows: [{ label: 'About Watch Later', detail: 'A little about this app', icon: 'information-circle-outline', route: '/about', hint: 'Open About Watch Later' }, { label: 'Privacy & terms', detail: 'Your data, your choice', icon: 'shield-checkmark-outline', route: '/privacy', hint: 'Open Privacy and Terms' }] },
+  { title: 'ABOUT', rows: [{ label: 'About Watch Later', detail: 'A little about this app', icon: 'information-circle-outline', route: '/about', hint: 'Open About Watch Later' }, { label: 'Privacy Policy', detail: 'Your data, your choice', icon: 'shield-checkmark-outline', url: PRIVACY_POLICY_URL, hint: 'Opens the privacy policy on teraplayer.in' }, { label: 'Terms & Conditions', detail: 'The rules for using the app', icon: 'document-text-outline', url: TERMS_URL, hint: 'Opens the terms on teraplayer.in' }] },
 ];
 
 /** Human "12 min ago" style label for the last successful sync. */
@@ -126,7 +127,6 @@ export default function MoreScreen() {
   const setSession = useSessionStore((state) => state.setSession);
   const onboardingComplete = useSessionStore((state) => state.onboardingComplete);
   const sync = useSyncStore();
-  const { signOut: clerkSignOut } = useClerk();
   // Auth is hidden for now (code stays dormant): no sign-in rows, no
   // notification settings, no coming-soon discovery entries.
   const visibleGroups = useMemo(() => groups
@@ -182,10 +182,6 @@ export default function MoreScreen() {
     setBusy(true);
     try {
       await account.signOut();
-      // App sign-out ends BOTH sessions: a lingering Clerk session breaks
-      // the next Google sign-in (Clerk rejects a new SSO flow while signed
-      // in) and would sync under the wrong identity.
-      await clerkSignOut().catch(() => undefined);
       const guest = { mode: 'guest' as const, userId: `guest-${Date.now()}` };
       setSession(guest);
       await persistSession(guest, onboardingComplete);
@@ -200,7 +196,6 @@ export default function MoreScreen() {
     setBusy(true);
     try {
       await deleteAccount(session.userId);
-      await clerkSignOut().catch(() => undefined);
       const guest = { mode: 'guest' as const, userId: `guest-${Date.now()}` };
       setSession(guest);
       await persistSession(guest, onboardingComplete);
@@ -270,7 +265,7 @@ export default function MoreScreen() {
         <View style={styles.group}>
           <AppText variant="caption" style={styles.groupTitle}>{group.title}</AppText>
           <View style={styles.groupCard}>
-            {group.rows.map((row) => <MoreRow key={row.label} label={row.label} detail={row.detail} icon={row.icon} hint={row.hint} beta={row.beta} onPress={() => router.push(row.route as never)} />)}
+            {group.rows.map((row) => <MoreRow key={row.label} label={row.label} detail={row.detail} icon={row.icon} hint={row.hint} beta={row.beta} onPress={() => (row.url ? void openURL(row.url) : router.push(row.route as never))} />)}
           </View>
         </View>
       </FadeInView>

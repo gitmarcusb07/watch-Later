@@ -13,11 +13,13 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
+import { openURL } from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
 import { AppButton } from '@/components/buttons/AppButton';
 import { AppText } from '@/components/common/AppText';
 import { PosterBackdrop } from '@/components/onboarding/PosterBackdrop';
 import { SupabaseAuthService } from '@/features/auth/SupabaseAuthService';
+import { PRIVACY_POLICY_URL } from '@/lib/legal';
 import { showFriendlyError } from '@/lib/friendlyError';
 import { colors, radius, shadows, spacing } from '@/theme';
 import { persistSession } from '@/store/app/sessionPersistence';
@@ -202,7 +204,7 @@ export default function WelcomeScreen() {
             </Pressable>
           </View>
         )}
-        <View style={styles.privacy}><Ionicons name="lock-closed-outline" size={13} color={colors.textMuted} /><Pressable accessibilityRole="button" accessibilityLabel="Read our privacy notice" onPress={() => router.push('/privacy')}><AppText variant="caption" muted style={styles.privacyText}>Your collection stays yours</AppText></Pressable></View>
+        <View style={styles.privacy}><Ionicons name="lock-closed-outline" size={13} color={colors.textMuted} /><Pressable accessibilityRole="button" accessibilityLabel="Read our privacy policy" onPress={() => void openURL(PRIVACY_POLICY_URL)}><AppText variant="caption" muted style={styles.privacyText}>Your collection stays yours</AppText></Pressable></View>
       </Animated.View>
     </View>
   );
